@@ -1,7 +1,7 @@
 import pyaudio
 import wave
 
-def record_audio(filename="test_output.wav", duration=5):
+def record_audio(filename="test_output.wav", duration=10):
     CHUNK = 1024
     FORMAT = pyaudio.paInt16
     CHANNELS = 1

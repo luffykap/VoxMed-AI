@@ -3,16 +3,3 @@ __pycache__/
 *.pyc
 *.wav
 .DS_Store
-# Environment variables (NEVER commit this)
-.env
-
-# Database
-*.db
-
-# Generated output files
-output/*.log
-output/*.wav
-
-# macOS
-.DS_Store
-
