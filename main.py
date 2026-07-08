@@ -1,19 +1,23 @@
 from input.recorder import record_audio
 from processing.transcriber import transcribe_audio
-from utils.logger import get_logger
 
-logger = get_logger(__name__)
+def main():
+    while True:
+        print("\nPress Enter to start recording...")
+        input()
+
+        record_audio()
+
+        text = transcribe_audio()
+
+        print(f"\nYou said: {text}\n")
+
+        choice = input("Record again? (y/n): ").strip().lower()
+
+        if choice != "y":
+            print("Goodbye!")
+            break
+
 
 if __name__ == "__main__":
-    filename = "test_output.wav"
-
-    logger.info("Pipeline started")
-
-    record_audio(filename=filename, duration=5)
-
-    text = transcribe_audio(filename)
-
-    logger.info("Final transcription output | text=%s", text)
-
-    print("\nFinal Output:")
-    print(text)
+    main()

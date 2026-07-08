@@ -1,11 +1,6 @@
 import pyaudio
 import wave
 
-from utils.logger import get_logger
-
-logger = get_logger(__name__)
-
-
 def record_audio(filename="test_output.wav", duration=10):
     CHUNK = 1024
     FORMAT = pyaudio.paInt16
