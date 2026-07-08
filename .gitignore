@@ -1,18 +1,19 @@
-venv/
+# Python
 __pycache__/
 *.pyc
-*.wav
-.DS_Store
-# Environment variables (NEVER commit this)
+.venv/
+
+# Environment
 .env
 
 # Database
 *.db
 
-# Generated output files
+# Generated logs
 output/*.log
+
+# Generated audio
 output/*.wav
 
 # macOS
 .DS_Store
-

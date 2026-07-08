@@ -1,39 +1,56 @@
 import speech_recognition as sr
 
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 def transcribe_audio(filename="test_output.wav") -> str:
-    """
-    Transcribe audio from a WAV file to text using Google's speech recognition API.
-    
-    Args:
-        filename: Path to the WAV file to transcribe (default: test_output.wav)
-    
-    Returns:
-        Transcribed text as a string, or empty string if transcription fails
-    """
     recognizer = sr.Recognizer()
-    
+
+    logger.info("Transcription started | file=%s", filename)
+
     try:
         with sr.AudioFile(filename) as source:
             audio = recognizer.record(source)
-        
+
+        logger.info("Audio loaded successfully | file=%s", filename)
+
         text = recognizer.recognize_google(audio)
+
+        if not text.strip():
+            logger.warning("Empty transcription result | file=%s", filename)
+            return ""
+
+        logger.info(
+            "Transcription successful | file=%s | text_length=%s",
+            filename,
+            len(text)
+        )
+
         return text
-    
+
     except sr.UnknownValueError:
-        print("Error: Audio could not be understood. Please speak clearly.")
+        logger.warning(
+            "Speech not understood | file=%s | possible unclear audio",
+            filename
+        )
         return ""
-    
+
     except sr.RequestError as e:
-        print(f"Error: Could not request results from Google Speech Recognition API; {e}")
+        logger.error(
+            "Google Speech API request failed | file=%s | error=%s",
+            filename,
+            str(e)
+        )
         return ""
-    
+
     except FileNotFoundError:
-        print(f"Error: Audio file '{filename}' not found.")
+        logger.error("Audio file not found | file=%s", filename)
         return ""
-    
-    except Exception as e:
-        print(f"Error: An unexpected error occurred during transcription: {e}")
+
+    except Exception:
+        logger.exception("Unexpected error during transcription | file=%s", filename)
         return ""
 
 

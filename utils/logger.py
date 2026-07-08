@@ -1,4 +1,3 @@
-# utils/logger.py – Centralized logging for VoxMed AI
 import logging
 import sys
 from pathlib import Path
@@ -7,33 +6,29 @@ import config
 
 
 def get_logger(name: str) -> logging.Logger:
-    """
-    Returns a configured logger for the given module name.
-    Usage:  logger = get_logger(__name__)
-    """
+    """Return a configured logger."""
+
     logger = logging.getLogger(name)
 
-    # Guard: avoid duplicate handlers if logger already created
     if logger.handlers:
         return logger
 
-    # Read level from config (e.g. "INFO" → logging.INFO)
+    logger.propagate = False
+
     log_level = getattr(logging, config.LOG_LEVEL.upper(), logging.INFO)
     logger.setLevel(log_level)
 
-    # Format: timestamp | level | module | message
     formatter = logging.Formatter(
         fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # ── Handler 1: Print to terminal ───────────────────────────
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # ── Handler 2: Write to log file ───────────────────────────
     Path(config.LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
+
     file_handler = logging.FileHandler(config.LOG_FILE)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
