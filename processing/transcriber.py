@@ -1,14 +1,19 @@
+# pyrefly: ignore [missing-import]
 import speech_recognition as sr
 
+import config
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-def transcribe_audio(filename="test_output.wav") -> str:
+def transcribe_audio(filename=config.TEMP_AUDIO_FILE, language_code=None) -> str:
     recognizer = sr.Recognizer()
+    
+    if language_code is None:
+        language_code = config.SUPPORTED_LANGUAGES[config.DEFAULT_LANGUAGE]["code"]
 
-    logger.info("Transcription started | file=%s", filename)
+    logger.info("Transcription started | file=%s | language=%s", filename, language_code)
 
     try:
         with sr.AudioFile(filename) as source:
@@ -16,7 +21,7 @@ def transcribe_audio(filename="test_output.wav") -> str:
 
         logger.info("Audio loaded successfully | file=%s", filename)
 
-        text = recognizer.recognize_google(audio)
+        text = recognizer.recognize_google(audio, language=language_code)
 
         if not text.strip():
             logger.warning("Empty transcription result | file=%s", filename)

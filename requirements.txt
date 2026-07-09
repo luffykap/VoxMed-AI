@@ -1,7 +1,10 @@
 # Audio
-SpeechRecognition==3.10.4
+SpeechRecognition==3.17.0
 pyaudio==0.2.14
 pyttsx3==2.90
+
+# NLP / Translation
+deep-translator==1.11.4
 
 # Backend API
 fastapi==0.111.0
