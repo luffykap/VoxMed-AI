@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 import speech_recognition as sr
 
 import config

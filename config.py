@@ -15,14 +15,22 @@ AUDIO_CHANNELS = 1          # Mono audio (1 channel)
 AUDIO_RATE = 44100          # Sample rate in Hz
 AUDIO_DURATION = 5          # Default recording duration in seconds
 TEMP_AUDIO_FILE = str(OUTPUT_DIR / "temp_recording.wav")
+SILENCE_THRESHOLD = 500     # RMS amplitude below which audio is considered silent
+SILENCE_DURATION  = 2.0     # Seconds of continuous silence before recording stops
 
 # ── Language Settings ──────────────────────────────────────────
 SUPPORTED_LANGUAGES = {
     "1": {"code": "en-US", "name": "English", "tts_lang": "en"},
     "2": {"code": "hi-IN", "name": "Hindi",   "tts_lang": "hi"},
-    "3": {"code": "kn-IN", "name": "Kannada", "tts_lang": "kn"},
+    "3": {"code": "kn",    "name": "Kannada", "tts_lang": "kn"},
+    "4": {"code": "te",    "name": "Telugu",  "tts_lang": "te"},
 }
 DEFAULT_LANGUAGE = "1"  # English
+
+# ── Whisper (faster-whisper) ───────────────────────────────────
+WHISPER_MODEL        = "large-v3"  # Options: large-v3, turbo, medium, small
+WHISPER_DEVICE       = "cpu"
+WHISPER_COMPUTE_TYPE = "int8"
 
 # ── Database Settings ──────────────────────────────────────────
 DB_ECHO = False  # Set True to log all SQL queries (for debugging)

@@ -1,54 +1,89 @@
-import pyaudio
+import audioop
 import wave
 import config
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-def record_audio(filename=config.TEMP_AUDIO_FILE, duration=config.AUDIO_DURATION):
-    CHUNK = config.AUDIO_CHUNK
-    FORMAT = pyaudio.paInt16
-    CHANNELS = config.AUDIO_CHANNELS
-    RATE = config.AUDIO_RATE
+import pyaudio
+
+import config
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def record_audio(
+    filename: str = config.TEMP_AUDIO_FILE,
+    max_duration: int = config.AUDIO_DURATION,
+    silence_threshold: int = config.SILENCE_THRESHOLD,
+    silence_duration: float = config.SILENCE_DURATION,
+) -> bytes:
+    chunk    = config.AUDIO_CHUNK
+    fmt      = pyaudio.paInt16
+    channels = config.AUDIO_CHANNELS
+    rate     = config.AUDIO_RATE
 
     logger.info(
-        "Audio recording started | file=%s | duration=%ss | rate=%s | channels=%s",
-        filename, duration, RATE, CHANNELS
+        "Audio recording started | file=%s | max_duration=%ss | rate=%s | channels=%s",
+        filename, max_duration, rate, channels,
     )
 
+    p = pyaudio.PyAudio()
+    stream = p.open(
+        format=fmt,
+        channels=channels,
+        rate=rate,
+        input=True,
+        frames_per_buffer=chunk,
+    )
+
+    frames: list[bytes] = []
+    silent_chunks = 0
+    max_chunks    = int(rate / chunk * max_duration)
+    silence_limit = int(rate / chunk * silence_duration)
+
     try:
-        p = pyaudio.PyAudio()
-
-        stream = p.open(
-            format=FORMAT,
-            channels=CHANNELS,
-            rate=RATE,
-            input=True,
-            frames_per_buffer=CHUNK
-        )
-
-        frames = []
-
-        for _ in range(int(RATE / CHUNK * duration)):
-            data = stream.read(CHUNK)
+        for _ in range(max_chunks):
+            data = stream.read(chunk, exception_on_overflow=False)
             frames.append(data)
 
-        logger.info("Audio recording completed | frames_collected=%s", len(frames))
+            rms = audioop.rms(data, 2)  # 2 bytes per sample for paInt16
+            if rms < silence_threshold:
+                silent_chunks += 1
+            else:
+                silent_chunks = 0
 
+            if silent_chunks >= silence_limit:
+                logger.info(
+                    "Silence detected | silent_chunks=%d | stopping early", silent_chunks
+                )
+                break
+
+        logger.info("Audio recording completed | frames_collected=%d", len(frames))
+
+    except Exception:
+        logger.exception("Audio recording failed | file=%s", filename)
         stream.stop_stream()
         stream.close()
-
-        # Save file
-        wf = wave.open(filename, 'wb')
-        wf.setnchannels(CHANNELS)
-        wf.setsampwidth(p.get_sample_size(FORMAT))
-        wf.setframerate(RATE)
-        wf.writeframes(b''.join(frames))
-        wf.close()
-
-        logger.info("Audio file saved successfully | path=%s", filename)
-
         p.terminate()
+        return b""
 
-    except Exception as e:
-        logger.exception("Audio recording failed | file=%s", filename)
+    stream.stop_stream()
+    stream.close()
+
+    audio_data = b"".join(frames)
+
+    try:
+        wf = wave.open(filename, "wb")
+        wf.setnchannels(channels)
+        wf.setsampwidth(p.get_sample_size(fmt))
+        wf.setframerate(rate)
+        wf.writeframes(audio_data)
+        wf.close()
+        logger.info("Audio file saved successfully | path=%s", filename)
+    except Exception:
+        logger.exception("Failed to save audio file | path=%s", filename)
+
+    p.terminate()
+    return audio_data
