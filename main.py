@@ -1,7 +1,6 @@
 import config
 from processing.stt import transcribe
-from processing.nlp import analyse
-from processing.dialogue import DialogueManager, DialogueState
+from processing.orchestrator import ConversationOrchestrator
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -27,13 +26,13 @@ def main():
         lang_code = None
         print("\nSelected: Auto-Detect")
 
-    dm = DialogueManager()
-    
+    dm = ConversationOrchestrator(language=lang_code or "en")
+
     # Initial greeting
     _print_divider()
     print(f"\n[AI]: {dm.get_greeting()}\n")
 
-    while dm.state != DialogueState.FAREWELL:
+    while not dm.is_finished:
         print("\nPress Enter to start speaking...")
         input()
 
@@ -51,16 +50,8 @@ def main():
 
         print(f"\n[You]: {stt_result['text']}")
 
-        # ── Stage 2: NLP ──────────────────────────────────────────────────────
-        nlp_result = analyse(stt_result["text"])
-        logger.info(
-            "Pipeline completed | intent=%s | missing=%s",
-            nlp_result["intent"],
-            nlp_result["missing_entities"],
-        )
-
-        # ── Stage 3: Dialogue Manager ─────────────────────────────────────────
-        ai_response = dm.process(stt_result["text"], nlp_result)
+        # ── Stage 2 & 3: Orchestrator (LLM understand + reply) ───────────────
+        ai_response = dm.process(stt_result["text"])
         
         _print_divider()
         print(f"\n[AI]: {ai_response}\n")
