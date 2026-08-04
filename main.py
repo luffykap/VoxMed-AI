@@ -1,6 +1,7 @@
 import config
 from processing.stt import transcribe
 from processing.orchestrator import ConversationOrchestrator
+from processing.tts import speak
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -30,7 +31,9 @@ def main():
 
     # Initial greeting
     _print_divider()
-    print(f"\n[AI]: {dm.get_greeting()}\n")
+    greeting = dm.get_greeting()
+    print(f"\n[AI]: {greeting}\n")
+    speak(greeting, language=lang_code or "en")
 
     while not dm.is_finished:
         print("\nPress Enter to start speaking...")
@@ -55,6 +58,7 @@ def main():
         
         _print_divider()
         print(f"\n[AI]: {ai_response}\n")
+        speak(ai_response, language=lang_code or "en")
 
     print("\nConversation ended. Goodbye!")
 
