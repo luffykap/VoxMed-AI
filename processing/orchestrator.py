@@ -177,6 +177,25 @@ class ConversationOrchestrator:
         intent = self.memory.intent
         ents   = self.memory.entities
 
+        # Auto-resolve "ANY" date/time
+        if intent in ("book_appointment", "reschedule_appointment"):
+            if ents.get("date") == "ANY" or ents.get("time") == "ANY":
+                from database import find_available_slot
+                dept = ents.get("department")
+                if not dept and ents.get("symptoms"):
+                    dept = appointments._map_symptoms_to_department(ents.get("symptoms"))
+                dept = dept or config.DEFAULT_DEPARTMENT
+                
+                search_date = None if ents.get("date") == "ANY" else ents.get("date")
+                search_time = None if ents.get("time") == "ANY" else ents.get("time")
+                
+                slot = find_available_slot(dept, search_date, search_time)
+                if slot:
+                    ents["date"] = slot["slot_date"]
+                    ents["time"] = slot["slot_time"]
+                    if not ents.get("doctor"):
+                        ents["doctor"] = slot["doctor_name"]
+
         backend_result: dict[str, Any] = {}
 
         if intent == "book_appointment":

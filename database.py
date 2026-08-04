@@ -29,7 +29,7 @@ def init_db():
     # 1. Drop existing tables if they exist to start fresh with new schema
     tables = [
         "Feedback", "AI_Logs", "Conversations", "Calls", 
-        "Appointments", "Slots", "Doctors", "Departments", "Patients"
+        "Appointments", "Slots", "Doctors", "Departments", "Patients", "SymptomMappings"
     ]
     for table in tables:
         cursor.execute(f"DROP TABLE IF EXISTS {table}")
@@ -113,6 +113,12 @@ def init_db():
             comments TEXT,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (appointment_id) REFERENCES Appointments (id)
+        );
+
+        CREATE TABLE SymptomMappings (
+            symptom TEXT PRIMARY KEY,
+            department_name TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     ''')
     conn.commit()
@@ -256,6 +262,12 @@ def _inject_dummy_data(cursor):
         feedback_inserts.append((appt['id'], rating, comment))
 
     cursor.executemany("INSERT INTO Feedback (appointment_id, rating, comments) VALUES (?, ?, ?)", feedback_inserts)
+
+    # 10. Symptom Mappings (Seed from config)
+    symptom_inserts = []
+    for symptom, (dept, _) in config.SYMPTOM_TO_DEPARTMENT.items():
+        symptom_inserts.append((symptom.lower(), dept))
+    cursor.executemany("INSERT INTO SymptomMappings (symptom, department_name) VALUES (?, ?)", symptom_inserts)
 
 if __name__ == "__main__":
     init_db()

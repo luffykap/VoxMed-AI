@@ -60,8 +60,8 @@ _SYSTEM_DETECT_INTENT = (
     "- doctor: 'Dr. Lastname' format\n"
     "- department: medical department name\n"
     "- symptoms: list of symptom strings\n"
-    "- date: YYYY-MM-DD (today: {today})\n"
-    "- time: HH:MM 24h\n"
+    "- date: YYYY-MM-DD (today: {today}). If user says 'anytime', 'whenever', or 'any day', extract 'ANY'.\n"
+    "- time: HH:MM 24h. If user says 'anytime', 'whenever', or 'any time', extract 'ANY'.\n"
     "Output raw JSON only. No markdown."
 )
 
@@ -78,7 +78,8 @@ _SYSTEM_EXTRACT_ENTITIES = (
     '{{"entities": {{}}, "intent_switch": false}}\n\n'
     "- Include only entity keys that are NEW or CHANGED in this message.\n"
     "- intent_switch=true ONLY if user explicitly abandons current goal ('cancel instead', 'forget it').\n"
-    "- date: YYYY-MM-DD. time: HH:MM 24h. patient_name: only if explicitly stated.\n"
+    "- date: YYYY-MM-DD. time: HH:MM 24h. If user says 'anytime' or 'whichever', extract 'ANY' for both.\n"
+    "- patient_name: only if explicitly stated.\n"
     "Output raw JSON only. No markdown."
 )
 
@@ -352,3 +353,48 @@ def _fallback_reply(backend_result: dict | None) -> str:
     if backend_result:
         return backend_result.get("message", "Action completed.")
     return "How else can I help you?"
+
+def infer_department(symptoms: list[str]) -> str:
+    """
+    Auto-learning feature: Infer the best medical department from a list of unknown symptoms.
+    Uses the LLM to classify.
+    """
+    has_any_key = any(
+        config.LLM_PROVIDERS.get(name, {}).get("api_key")
+        for name in config.LLM_PROVIDER_CHAIN
+    )
+    if not has_any_key:
+        logger.warning("No LLM API keys for infer_department, defaulting to %s.", config.DEFAULT_DEPARTMENT)
+        return config.DEFAULT_DEPARTMENT
+        
+    symptoms_str = ", ".join(symptoms)
+    
+    departments = [
+        "General Medicine", "Cardiology", "Dermatology", "Neurology",
+        "Orthopedics", "ENT", "Ophthalmology", "Pediatrics",
+        "Gynecology", "Psychiatry", "Gastroenterology"
+    ]
+    
+    system_prompt = (
+        "You are a medical AI assistant classifying symptoms to medical departments.\n"
+        "Given the symptoms, return ONLY the exact name of the most appropriate department from this list:\n"
+        f"{departments}\n\n"
+        f"If you are unsure, return '{config.DEFAULT_DEPARTMENT}'.\n"
+        "Do not include any other text or formatting."
+    )
+    
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"Symptoms: {symptoms_str}"}
+    ]
+    
+    try:
+        reply = _call_with_failover(messages, json_mode=False, max_tokens=15).strip()
+        logger.info("LLM infer_department inferred: %s", reply)
+        for d in departments:
+            if d.lower() in reply.lower():
+                return d
+        return config.DEFAULT_DEPARTMENT
+    except Exception as exc:
+        logger.warning("LLM infer_department failed (%s) — defaulting", exc)
+        return config.DEFAULT_DEPARTMENT

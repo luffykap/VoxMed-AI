@@ -27,25 +27,34 @@ def _get_or_create_patient(name: str, phone: str = None) -> int:
 def _map_symptoms_to_department(symptoms: list[str] | None) -> str | None:
     if not symptoms:
         return None
-    mapping = {
-        "chest pain": "Cardiology",
-        "heart palpitation": "Cardiology",
-        "fever": "General Medicine",
-        "cough": "General Medicine",
-        "headache": "General Medicine",
-        "stomach ache": "General Medicine",
-        "nausea": "General Medicine",
-        "vomiting": "General Medicine",
-        "dizzy": "General Medicine",
-        "weakness": "General Medicine",
-        "joint pain": "Orthopedics",
-        "skin rash": "Dermatology",
-        "breathing issue": "General Medicine",
-    }
-    for symp in symptoms:
-        if symp in mapping:
-            return mapping[symp]
-    return "General Medicine"
+        
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Check database cache first
+        for symp in symptoms:
+            cursor.execute("SELECT department_name FROM SymptomMappings WHERE symptom = ? COLLATE NOCASE", (symp.lower(),))
+            row = cursor.fetchone()
+            if row:
+                return row['department_name']
+                
+        # If not found in DB, infer using LLM (auto-learning)
+        from services import llm_client
+        inferred_dept = llm_client.infer_department(symptoms)
+        
+        # Save the new mapping to the database cache
+        first_symptom = symptoms[0].lower()
+        cursor.execute(
+            "INSERT OR IGNORE INTO SymptomMappings (symptom, department_name) VALUES (?, ?)", 
+            (first_symptom, inferred_dept)
+        )
+        conn.commit()
+        
+        logger.info("Auto-learned new symptom '%s' mapped to '%s'", first_symptom, inferred_dept)
+        return inferred_dept
+    finally:
+        conn.close()
 
 def _get_doctor_id(doctor_name: str, cursor) -> Optional[int]:
     """Find doctor ID. Very basic match for now."""
