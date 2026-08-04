@@ -10,6 +10,9 @@ from datetime import date, timedelta
 
 logger = get_logger(__name__)
 
+_schema_ensured = False
+_cleanup_done   = False
+
 def get_connection() -> sqlite3.Connection:
     """Returns a connection to the SQLite database."""
     conn = sqlite3.connect(config.DB_PATH)
@@ -18,10 +21,93 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = 1")
     if config.DB_ECHO:
         conn.set_trace_callback(print)
+    # Ensure newer tables exist and clean up past data — once per process
+    global _schema_ensured
+    if not _schema_ensured:
+        _ensure_schema(conn)
+        _schema_ensured = True
     return conn
 
+
+def _ensure_schema(conn: sqlite3.Connection) -> None:
+    """
+    Create tables that may be missing from an older voxmed.db
+    WITHOUT dropping or altering existing tables.
+    Also prunes past slots/appointments on first connection each session.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='SymptomMappings'"
+    )
+    if not cursor.fetchone():
+        cursor.execute('''
+            CREATE TABLE SymptomMappings (
+                symptom TEXT PRIMARY KEY,
+                department_name TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        # Seed from config.SYMPTOM_TO_DEPARTMENT
+        symptom_inserts = [
+            (symptom.lower(), dept)
+            for symptom, (dept, _) in config.SYMPTOM_TO_DEPARTMENT.items()
+        ]
+        cursor.executemany(
+            "INSERT OR IGNORE INTO SymptomMappings (symptom, department_name) VALUES (?, ?)",
+            symptom_inserts,
+        )
+        conn.commit()
+        logger.info("Created missing SymptomMappings table and seeded %d rows", len(symptom_inserts))
+
+    # Clean up past data once per process
+    _cleanup_past_slots(conn)
+
+
+def _cleanup_past_slots(conn: sqlite3.Connection) -> None:
+    """
+    Remove slots from past dates and archive their appointments.
+    Runs once per process (guarded by _cleanup_done).
+    """
+    global _cleanup_done
+    if _cleanup_done:
+        return
+    _cleanup_done = True
+
+    from datetime import date as _date
+    today = _date.today().isoformat()
+
+    cursor = conn.cursor()
+
+    # Mark ALL appointments whose slot is in the past as COMPLETED
+    # (covers BOOKED, RESCHEDULED, CANCELED — any status still pointing to a past slot)
+    cursor.execute(
+        """
+        UPDATE Appointments SET status = 'COMPLETED'
+        WHERE slot_id IN (
+            SELECT id FROM Slots WHERE slot_date < ?
+        )
+        """,
+        (today,),
+    )
+    completed = cursor.rowcount
+
+    # Temporarily disable FK enforcement so we can delete past Slots
+    # even though Appointments rows still reference them (they're already archived above).
+    cursor.execute("PRAGMA foreign_keys = OFF")
+    cursor.execute("DELETE FROM Slots WHERE slot_date < ?", (today,))
+    deleted_slots = cursor.rowcount
+    cursor.execute("PRAGMA foreign_keys = ON")
+
+    conn.commit()
+    if deleted_slots:
+        logger.info(
+            "Past-slot cleanup: archived %d appointments, deleted %d past slots",
+            completed, deleted_slots,
+        )
+
+
 def init_db():
-    """Initializes the 9-table database schema."""
+    """Initializes the 10-table database schema."""
     logger.info("Initializing database schema at %s", config.DB_PATH)
     conn = get_connection()
     cursor = conn.cursor()
@@ -138,7 +224,7 @@ def _inject_dummy_data(cursor):
     departments = [
         "General Medicine", "Cardiology", "Dermatology", "Neurology",
         "Orthopedics", "ENT", "Ophthalmology", "Pediatrics",
-        "Gynecology", "Psychiatry"
+        "Gynecology", "Psychiatry", "Gastroenterology"
     ]
     cursor.executemany("INSERT INTO Departments (name) VALUES (?)", [(d,) for d in departments])
 
@@ -201,7 +287,7 @@ def _inject_dummy_data(cursor):
     selected_slots = random.sample(booked_slots, min(60, len(booked_slots)))
     
     appointment_inserts = []
-    statuses = ['BOOKED', 'COMPLETED', 'CANCELLED', 'RESCHEDULED']
+    statuses = ['BOOKED', 'COMPLETED', 'CANCELED', 'RESCHEDULED']
     for slot in selected_slots:
         p_id = random.choice(patient_ids)
         status = random.choice(statuses)

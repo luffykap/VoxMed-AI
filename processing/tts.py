@@ -1,74 +1,53 @@
+"""
+processing/tts.py
+-----------------
+Text-to-Speech using pyttsx3 (offline, cross-platform).
+
+Creates a fresh engine per speak() call to avoid the Windows SAPI5 bug
+where runAndWait() silently fails after the first invocation.
+"""
 import pyttsx3
-import config
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Initialize the TTS engine once globally
-try:
-    engine = pyttsx3.init()
-    # Configure base properties (rate, volume)
-    engine.setProperty('rate', 175)
-    engine.setProperty('volume', 1.0)
-    logger.info("pyttsx3 TTS engine initialized successfully.")
-except Exception as e:
-    logger.error("Failed to initialize pyttsx3: %s", e)
-    engine = None
+# Voice hint table — checked once, cached for reuse.
+_VOICE_HINTS = {
+    "hi": ["lekha", "hindi", "kalpana"],
+    "kn": ["kannada"],
+    "te": ["telugu"],
+    "en": ["zira", "david", "samantha", "daniel", "english"],
+}
+
 
 def speak(text: str, language: str = "en") -> None:
     """
-    Speaks the given text using the local TTS engine.
-    Attempts to select a voice matching the requested language.
+    Speak the given text aloud.
+
+    A fresh pyttsx3 engine is created each time because the Windows
+    SAPI5 driver's event loop hangs after the first runAndWait().
     """
-    if not text.strip():
+    if not text or not text.strip():
         return
 
-    if not engine:
-        import sys
-        if sys.platform == "darwin":
-            import subprocess
-            logger.info("Using macOS 'say' fallback for TTS.")
-            # Map language to a standard Mac voice if possible
-            voice_arg = "Samantha"
-            if language.lower() == "hi":
-                voice_arg = "Lekha"
-            try:
-                subprocess.run(["say", "-v", voice_arg, text], check=True)
-            except Exception as e:
-                logger.error("macOS 'say' fallback failed: %s", e)
-        else:
-            logger.error("TTS engine is not initialized. Cannot speak.")
-        return
-
-    # Attempt to find an appropriate voice
-    # macOS voices usually have identifiers like 'com.apple.speech.synthesis.voice.lekha'
-    target_lang = language.lower()
-    
-    # Common mappings for macOS / Windows
-    voice_hints = {
-        "hi": ["lekha", "hindi", "kalpana"],
-        "en": ["samantha", "daniel", "english", "zira", "david"]
-    }
-    
-    hints = voice_hints.get(target_lang, [target_lang])
-    
-    selected_voice_id = None
-    voices = engine.getProperty('voices')
-    
-    for voice in voices:
-        voice_str = f"{voice.id} {voice.name} {voice.languages}".lower()
-        if any(hint in voice_str for hint in hints):
-            selected_voice_id = voice.id
-            break
-            
-    if selected_voice_id:
-        engine.setProperty('voice', selected_voice_id)
-        
-    logger.info("Speaking text (lang=%s, length=%d, voice=%s)", 
-                language, len(text), selected_voice_id or "default")
-    
     try:
+        engine = pyttsx3.init()
+        engine.setProperty("rate", 175)
+        engine.setProperty("volume", 1.0)
+
+        # Try to pick a voice matching the language
+        hints = _VOICE_HINTS.get(language.lower(), [language.lower()])
+        voices = engine.getProperty("voices")
+        for voice in voices:
+            voice_str = f"{voice.id} {voice.name}".lower()
+            if any(hint in voice_str for hint in hints):
+                engine.setProperty("voice", voice.id)
+                break
+
+        logger.info("TTS speaking (lang=%s, length=%d chars)", language, len(text))
         engine.say(text)
         engine.runAndWait()
-    except Exception as e:
-        logger.error("Error during TTS speak: %s", e)
+        engine.stop()
+    except Exception:
+        logger.exception("TTS speak failed")
+

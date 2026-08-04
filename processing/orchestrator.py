@@ -40,8 +40,9 @@ _SLOT_TEMPLATES = {
 
     "reschedule_appointment": {
         "patient_name": "Please provide the patient's name.",
-        "date": "What is the current appointment date?",
-        "time": "What new time would you like?",
+        "current_date": "What is the date of your current appointment?",
+        "new_date": "What new date would you like to reschedule to?",
+        "new_time": "What time would you prefer on the new date?",
     },
 
     "check_availability": {
@@ -64,6 +65,7 @@ class ConversationOrchestrator:
         self.memory   = ConversationMemory(language=language)
         self.call_id  = create_call()
         self._finished = False
+        self._reschedule_attempts = 0   # counts consecutive failed reschedule slot tries
         logger.info("ConversationOrchestrator initialized | call_id=%s | lang=%s",
                     self.call_id, language)
 
@@ -210,8 +212,14 @@ class ConversationOrchestrator:
             if success:
                 backend_result = {"success": True, "message": msg, **context}
                 self._finished = True
+            elif "in the past" in msg:
+                # Past-date rejection — clear only date/time and ask again
+                self.memory.entities["date"] = None
+                self.memory.entities["time"] = None
+                backend_result = {"success": False, "message": msg}
+                self._finished = False
             else:
-                # Booking failed — search for alternatives (Problem 5)
+                # Slot unavailable — search for alternatives (Problem 5)
                 alternatives = self._find_alternative_slots()
                 if alternatives:
                     alt_list = "; ".join(
@@ -232,6 +240,7 @@ class ConversationOrchestrator:
                     backend_result = {"success": False, "message": msg}
                     self._finished = True  # Genuinely no slots available
 
+
         elif intent == "cancel_appointment":
             success, msg = appointments.cancel_appointment(
                 ents.get("patient_name"),
@@ -243,11 +252,51 @@ class ConversationOrchestrator:
         elif intent == "reschedule_appointment":
             success, msg = appointments.reschedule_appointment(
                 ents.get("patient_name"),
-                ents.get("date"),
-                ents.get("time"),
+                ents.get("current_date"),
+                ents.get("new_date"),
+                ents.get("new_time"),
             )
-            backend_result = {"success": success, "message": msg}
-            self._finished = True
+            if success:
+                self._reschedule_attempts = 0
+                backend_result = {"success": True, "message": msg}
+                self._finished = True
+            else:
+                self._reschedule_attempts += 1
+                # After 2 failed attempts, suggest free slots for the same doctor
+                if self._reschedule_attempts >= 2:
+                    doctor_id = self._get_doctor_id_from_appointment(
+                        ents.get("patient_name"), ents.get("current_date")
+                    )
+                    if doctor_id:
+                        free_slots = appointments.find_free_slots_for_doctor(doctor_id, limit=3)
+                        if free_slots:
+                            slot_list = "; ".join(
+                                f"{s['slot_date']} at {s['slot_time']}"
+                                for s in free_slots
+                            )
+                            doctor_name = free_slots[0].get("doctor_name", "the doctor")
+                            alt_msg = (
+                                f"{msg} Here are available slots for {doctor_name}: "
+                                f"{slot_list}. Which would you prefer?"
+                            )
+                            backend_result = {"success": False, "message": alt_msg}
+                        else:
+                            backend_result = {
+                                "success": False,
+                                "message": f"{msg} No upcoming free slots found for this doctor.",
+                            }
+                    else:
+                        backend_result = {"success": False, "message": msg}
+                    self._reschedule_attempts = 0  # reset after showing alternatives
+                else:
+                    backend_result = {
+                        "success": False,
+                        "message": f"{msg} Please choose a different date or time.",
+                    }
+                # Keep patient_name and current_date; only clear the failed new slot fields
+                self.memory.entities["new_date"] = None
+                self.memory.entities["new_time"] = None
+                self._finished = False
 
         elif intent == "check_availability":
             success, msg = appointments.check_availability(ents.get("date"))
@@ -323,6 +372,34 @@ class ConversationOrchestrator:
         conn.close()
         logger.info("Alternative slots found: %d for dept=%s", len(alternatives), dept)
         return alternatives
+
+    def _get_doctor_id_from_appointment(
+        self, patient_name: str | None, current_date: str | None
+    ) -> int | None:
+        """Look up the doctor_id of the patient's existing BOOKED appointment on current_date."""
+        if not patient_name or not current_date:
+            return None
+        try:
+            from database import get_connection
+            conn = get_connection()
+            row = conn.execute(
+                """
+                SELECT a.doctor_id
+                FROM   Appointments a
+                JOIN   Patients p ON a.patient_id = p.id
+                JOIN   Slots    s ON a.slot_id    = s.id
+                WHERE  p.name LIKE ? COLLATE NOCASE
+                  AND  s.slot_date = ?
+                  AND  a.status = 'BOOKED'
+                LIMIT 1
+                """,
+                (f"%{patient_name}%", current_date),
+            ).fetchone()
+            conn.close()
+            return row["doctor_id"] if row else None
+        except Exception:
+            logger.exception("_get_doctor_id_from_appointment failed")
+            return None
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
