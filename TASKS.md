@@ -47,16 +47,20 @@
 - [x] `database.py` with SQLite schema
 - [x] `services/appointments.py` – booking engine
 
-## 🔲 PHASE 7: Text-to-Speech (Next Up)
-- `processing/tts.py` using pyttsx3
+## ✅ PHASE 7: Text-to-Speech
+### Done
+- [x] `processing/tts.py` using pyttsx3
+- [x] Integrated into `main.py`
 
-## 🔲 PHASE 8: Admin Dashboard (Not Started)
-- `api/server.py` – FastAPI REST endpoints
-- `admin/` – HTML/CSS/JS web UI
+## ✅ PHASE 8: Admin Dashboard
+### Done
+- [x] `api/server.py` – FastAPI REST endpoints
+- [x] `admin/` – HTML/CSS/JS web UI
 
-## 🔲 PHASE 9: Testing & Edge Cases (Not Started)
-- Full test suite in `tests/`
-- Edge case handling
+## ✅ PHASE 9: Testing & Edge Cases
+### Done
+- [x] Full test suite in `tests/`
+- [x] Edge case handling
 
 ## 🔲 PHASE 10: Deployment & API Migration (Not Started)
 - Twilio integration

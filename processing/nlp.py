@@ -77,7 +77,7 @@ _FOLLOW_UP: dict[str, str] = {
 _SYMPTOM_WORDS = {
     "feeling", "well", "sick", "fever", "pain", "cold", "cough", "tired",
     "weak", "dizzy", "nausea", "vomiting", "headache", "unwell", "ill",
-    "hurt", "hurting", "sore", "ache", "aching", "disease", "infection",
+    "hurt", "hurting", "sore", "ache", "aching", "disease", "infection", "not"
 }
 
 # ── Abstract interface ────────────────────────────────────────────────────────

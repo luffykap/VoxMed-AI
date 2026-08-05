@@ -78,7 +78,8 @@ _SYSTEM_EXTRACT_ENTITIES = (
     "Extract ONLY new information from the user's reply.\n"
     "Do NOT re-extract entities already in 'Already collected'.\n\n"
     "Return EXACTLY this JSON:\n"
-    '{{"entities": {{}}, "intent_switch": false}}\n\n'
+    '{{"entities": {{}}, "intent_switch": false, "side_query": null}}\n\n'
+    "- side_query: If the user asks a question instead of answering (e.g. 'what slots are free today?'), extract the core intent here (e.g., 'check_availability').\n"
     "- Include only entity keys that are NEW or CHANGED in this message.\n"
     "- intent_switch=true ONLY if user explicitly abandons current goal ('cancel instead', 'forget it').\n"
     "- date: YYYY-MM-DD. time: HH:MM 24h. If user says 'anytime' or 'whichever', extract 'ANY' for both.\n"
@@ -288,6 +289,7 @@ def understand(
             result = {
                 "entities":      parsed.get("entities") or {},
                 "intent_switch": bool(parsed.get("intent_switch", False)),
+                "side_query":    parsed.get("side_query"),
             }
         # Normalize common LLM entity aliases to our canonical schema
         entities = result.get("entities", {})
@@ -301,6 +303,7 @@ def understand(
             "patient": "patient_name",
             "doctor_name": "doctor",
             "dept": "department",
+            "symptom": "symptoms",
         }
 
         for old_key, new_key in aliases.items():

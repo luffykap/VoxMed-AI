@@ -91,12 +91,12 @@ def _cleanup_past_slots(conn: sqlite3.Connection) -> None:
     )
     completed = cursor.rowcount
 
-    # Temporarily disable FK enforcement so we can delete past Slots
-    # even though Appointments rows still reference them (they're already archived above).
-    cursor.execute("PRAGMA foreign_keys = OFF")
-    cursor.execute("DELETE FROM Slots WHERE slot_date < ?", (today,))
+    # Delete past Slots only if they are not referenced by Appointments
+    cursor.execute(
+        "DELETE FROM Slots WHERE slot_date < ? AND id NOT IN (SELECT slot_id FROM Appointments)", 
+        (today,)
+    )
     deleted_slots = cursor.rowcount
-    cursor.execute("PRAGMA foreign_keys = ON")
 
     conn.commit()
     if deleted_slots:

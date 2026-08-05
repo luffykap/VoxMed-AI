@@ -153,11 +153,65 @@ class ConversationOrchestrator:
 
         if missing:
             next_missing = missing[0]
+
+        side_query = understanding.get("side_query")
+        if side_query == "check_availability":
+            from datetime import date as _date
+            from database import get_connection
+            
+            target_date = entities.get("date") or self.memory.entities.get("date")
+            if not target_date or target_date == "ANY":
+                target_date = _date.today().isoformat()
+            
+            dept = self.memory.entities.get("department", config.DEFAULT_DEPARTMENT)
+            
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT s.slot_time, doc.name AS doctor_name
+                FROM Slots s
+                JOIN Doctors doc ON s.doctor_id = doc.id
+                JOIN Departments d ON doc.department_id = d.id
+                WHERE s.slot_date = ? AND s.is_booked = 0 AND d.name = ? COLLATE NOCASE
+                ORDER BY s.slot_time
+                LIMIT 3
+                """, (target_date, dept)
+            )
+            slots = cursor.fetchall()
+            conn.close()
+            
+            if slots:
+                times = ", ".join(s["slot_time"] for s in slots)
+                msg = f"On {target_date}, we have free slots at {times}."
+            else:
+                msg = f"Sorry, there are no available slots in {dept} on {target_date}."
+            
+            reply = llm_client.generate_reply(self.memory, {"success": bool(slots), "message": msg}, self.memory.language)
+            
+            # Steer back to the booking flow
+            if missing:
+                intent_templates = _SLOT_TEMPLATES.get(self.memory.intent, {})
+                slot_question = intent_templates.get(next_missing)
+                if slot_question:
+                    if self.memory.language and self.memory.language.lower() not in ("en", "english"):
+                        slot_question = llm_client.generate_reply(self.memory, {"success": True, "message": f"Ask the user: {slot_question}"}, self.memory.language)
+                    reply = f"{reply} {slot_question}"
+                    
+            save_ai_log("DM", "INFO", f"Side query handled. reply_len={len(reply)}")
+            return self._commit_reply(reply)
+
+        if missing:
+            next_missing = missing[0]
             # ⑧ Use predefined template — zero LLM calls for slot questions (Problem 6)
             intent_templates = _SLOT_TEMPLATES.get(self.memory.intent, {})
             reply = intent_templates.get(next_missing)
             if not reply:
                 reply = llm_client.generate_reply(self.memory, None, self.memory.language)
+            elif self.memory.language and self.memory.language.lower() not in ("en", "english"):
+                # Use LLM to translate the static slot question to the requested language
+                reply = llm_client.generate_reply(self.memory, {"success": True, "message": f"Ask the user: {reply}"}, self.memory.language)
+                
             save_ai_log("DM", "INFO",
                         f"Slot-filling: next={next_missing} | template={next_missing in _SLOT_TEMPLATES}")
             return self._commit_reply(reply)

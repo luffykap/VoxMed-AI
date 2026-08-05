@@ -22,12 +22,16 @@ def main():
 
     if lang_choice in config.SUPPORTED_LANGUAGES:
         lang_code = config.SUPPORTED_LANGUAGES[lang_choice]["code"].split("-")[0]
-        print(f"\nSelected: {config.SUPPORTED_LANGUAGES[lang_choice]['name']}")
+        lang_name = config.SUPPORTED_LANGUAGES[lang_choice]["name"]
+        print(f"\nSelected: {lang_name}")
     else:
         lang_code = None
+        lang_name = "English"
         print("\nSelected: Auto-Detect")
 
-    dm = ConversationOrchestrator(language=lang_code or "en")
+    auto_detect = (lang_code is None)
+
+    dm = ConversationOrchestrator(language=lang_name)
 
     # Initial greeting
     _print_divider()
@@ -35,21 +39,46 @@ def main():
     print(f"\n[AI]: {greeting}\n")
     speak(greeting, language=lang_code or "en")
 
+    retry_count = 0
+    
     while not dm.is_finished:
-        print("\nPress Enter to start speaking...")
-        input()
+        print("\n[Listening...]")
 
         # ── Stage 1: Record + Transcribe ─────────────────────────────────────
         logger.info("Pipeline started")
         stt_result = transcribe(language=lang_code)
 
         if not stt_result["text"]:
-            print("\n[AI]: Could not transcribe audio. Please try again.")
+            retry_count += 1
+            if retry_count >= 3:
+                msg = "I'm having trouble hearing you. Please try calling back later."
+                print(f"\n[AI]: {msg}\n")
+                speak(msg, language=lang_code or "en")
+                break
+            msg = "Could not transcribe audio. Please try again."
+            print(f"\n[AI]: {msg}")
+            speak(msg, language=lang_code or "en")
             continue
 
         if stt_result["confidence"] < 0.4:
-            print("\n[AI]: Low confidence transcription. Please speak clearly and try again.")
+            retry_count += 1
+            if retry_count >= 3:
+                msg = "I'm having trouble understanding you. Please try calling back later."
+                print(f"\n[AI]: {msg}\n")
+                speak(msg, language=lang_code or "en")
+                break
+            msg = "I didn't quite catch that. Please speak clearly and try again."
+            print(f"\n[AI]: {msg}")
+            speak(msg, language=lang_code or "en")
             continue
+
+        # If user selected Auto-Detect, update the language dynamically
+        if auto_detect:
+            detected_lang = stt_result.get("language")
+            if detected_lang:
+                iso_to_name = {"en": "English", "hi": "Hindi", "kn": "Kannada", "te": "Telugu"}
+                lang_code = detected_lang
+                dm.memory.language = iso_to_name.get(detected_lang, "English")
 
         print(f"\n[You]: {stt_result['text']}")
 
