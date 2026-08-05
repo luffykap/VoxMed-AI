@@ -65,6 +65,14 @@ def _get_doctor_id(doctor_name: str, cursor) -> Optional[int]:
     return row['id'] if row else None
 
 def book_appointment(name: str, doctor: str, department: str, symptoms: list[str], date: str, time: str) -> tuple[bool, str, dict]:
+    from datetime import date as _date
+    # Reject past dates immediately
+    if date and date != "ANY":
+        try:
+            if date < _date.today().isoformat():
+                return False, f"The date {date} is in the past. Please choose a date from today onwards.", {}
+        except (ValueError, TypeError):
+            pass
     patient_id = _get_or_create_patient(name)
     conn = get_connection()
     cursor = conn.cursor()
@@ -175,7 +183,15 @@ def cancel_appointment(name: str, date: str) -> tuple[bool, str]:
     
     return True, f"Your appointment on {date} has been successfully canceled."
 
-def reschedule_appointment(name: str, date: str, time: str) -> tuple[bool, str]:
+def reschedule_appointment(name: str, current_date: str, new_date: str, new_time: str) -> tuple[bool, str]:
+    from datetime import date as _date
+    # Reject past new dates immediately
+    if new_date and new_date != "ANY":
+        try:
+            if new_date < _date.today().isoformat():
+                return False, f"The date {new_date} is in the past. Please choose a date from today onwards."
+        except (ValueError, TypeError):
+            pass
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -187,31 +203,35 @@ def reschedule_appointment(name: str, date: str, time: str) -> tuple[bool, str]:
         
     patient_id = row['id']
     
+    # Find the existing booked appointment on the current_date
     cursor.execute('''
         SELECT a.id as appt_id, a.doctor_id, s.id as old_slot_id 
         FROM Appointments a
         JOIN Slots s ON a.slot_id = s.id
-        WHERE a.patient_id = ? AND a.status = 'BOOKED'
+        WHERE a.patient_id = ? AND s.slot_date = ? AND a.status = 'BOOKED'
         LIMIT 1
-    ''', (patient_id,))
+    ''', (patient_id, current_date))
     
     appt = cursor.fetchone()
     if not appt:
         conn.close()
-        return False, f"Sorry, I couldn't find any active appointments to reschedule."
+        return False, f"Sorry, I couldn't find a booked appointment on {current_date} for {name}."
         
-    # Find new slot for the SAME doctor
+    # Find new slot for the SAME doctor on the new date/time
     cursor.execute('''
         SELECT id FROM Slots 
         WHERE doctor_id = ? AND slot_date = ? AND slot_time = ? AND is_booked = 0
-    ''', (appt['doctor_id'], date, time))
+    ''', (appt['doctor_id'], new_date, new_time))
     new_slot = cursor.fetchone()
     
     if not new_slot:
+        # Get doctor name for the error message
+        cursor.execute("SELECT name FROM Doctors WHERE id = ?", (appt['doctor_id'],))
+        doc_name = cursor.fetchone()['name']
         conn.close()
-        return False, f"Sorry, the doctor is not available on {date} at {time}."
+        return False, f"Sorry, {doc_name} is not available on {new_date} at {new_time}."
         
-    # Apply changes
+    # Apply changes: free old slot, mark old appointment, book new slot, create new appointment
     cursor.execute("UPDATE Slots SET is_booked = 0 WHERE id = ?", (appt['old_slot_id'],))
     cursor.execute("UPDATE Appointments SET status = 'RESCHEDULED' WHERE id = ?", (appt['appt_id'],))
     
@@ -224,7 +244,7 @@ def reschedule_appointment(name: str, date: str, time: str) -> tuple[bool, str]:
     conn.commit()
     conn.close()
     
-    return True, f"Your appointment has been successfully rescheduled to {date} at {time}."
+    return True, f"Your appointment has been successfully rescheduled from {current_date} to {new_date} at {new_time}."
 
 def check_availability(date: str) -> tuple[bool, str]:
     conn = get_connection()
@@ -242,3 +262,34 @@ def check_availability(date: str) -> tuple[bool, str]:
         return True, f"Yes, there are {count} available slots on {date}."
     else:
         return False, f"Sorry, {date} is fully booked. Would you like to check another day?"
+
+
+def find_free_slots_for_doctor(doctor_id: int, limit: int = 3) -> list[dict]:
+    """
+    Return up to `limit` upcoming free slots for the given doctor,
+    ordered by date and time. Used by the reschedule retry loop.
+    """
+    from datetime import date as _date
+    today = _date.today().isoformat()
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT s.slot_date, s.slot_time, d.name AS doctor_name
+            FROM   Slots s
+            JOIN   Doctors d ON s.doctor_id = d.id
+            WHERE  s.doctor_id = ?
+              AND  s.is_booked = 0
+              AND  s.slot_date >= ?
+            ORDER BY s.slot_date, s.slot_time
+            LIMIT ?
+            """,
+            (doctor_id, today, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        logger.exception("find_free_slots_for_doctor failed | doctor_id=%s", doctor_id)
+        return []
+    finally:
+        conn.close()
+

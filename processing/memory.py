@@ -22,7 +22,7 @@ from typing import Any
 REQUIRED_ENTITIES: dict[str, list[str]] = {
     "book_appointment":       ["medical_need", "date", "time", "patient_name"],
     "cancel_appointment":     ["patient_name", "date"],
-    "reschedule_appointment": ["date", "time", "patient_name"],
+    "reschedule_appointment": ["patient_name", "current_date", "new_date", "new_time"],
     "check_availability":     ["date"],
     "general_inquiry":        [],
     "affirm":                 [],

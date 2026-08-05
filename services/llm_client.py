@@ -61,7 +61,10 @@ _SYSTEM_DETECT_INTENT = (
     "- department: medical department name\n"
     "- symptoms: list of symptom strings\n"
     "- date: YYYY-MM-DD (today: {today}). If user says 'anytime', 'whenever', or 'any day', extract 'ANY'.\n"
+    "  IMPORTANT: only extract dates that are today ({today}) or in the future. Ignore past dates.\n"
     "- time: HH:MM 24h. If user says 'anytime', 'whenever', or 'any time', extract 'ANY'.\n"
+    "- For reschedule_appointment: use 'current_date' for the existing appointment date, "
+    "'new_date' for the desired new date, 'new_time' for the desired new time (all YYYY-MM-DD / HH:MM).\n"
     "Output raw JSON only. No markdown."
 )
 
@@ -79,6 +82,9 @@ _SYSTEM_EXTRACT_ENTITIES = (
     "- Include only entity keys that are NEW or CHANGED in this message.\n"
     "- intent_switch=true ONLY if user explicitly abandons current goal ('cancel instead', 'forget it').\n"
     "- date: YYYY-MM-DD. time: HH:MM 24h. If user says 'anytime' or 'whichever', extract 'ANY' for both.\n"
+    "  IMPORTANT: only extract dates that are today ({today}) or in the future. Ignore past dates.\n"
+    "- For reschedule_appointment: use 'current_date' for the existing appointment date, "
+    "'new_date' for the desired new date, 'new_time' for the desired new time.\n"
     "- patient_name: only if explicitly stated.\n"
     "Output raw JSON only. No markdown."
 )
