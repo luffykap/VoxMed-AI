@@ -150,3 +150,7 @@ LLM_PROVIDERS: dict[str, dict] = {
 
 # Failover order: Gemini → Groq → Cerebras → Mistral → OpenRouter
 LLM_PROVIDER_CHAIN: list[str] = ["gemini", "groq", "cerebras", "mistral", "openrouter"]
+
+# ── Admin Dashboard Credentials ────────────────────────────────
+ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "voxmed123")
