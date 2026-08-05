@@ -84,7 +84,7 @@ navLinks.forEach(link => {
     });
 });
 
-// ── API Fetch Wrapper ───────────────────────────────────────────────────
+// ── API Fetch Wrapper ───────────────────────────────────────────
 async function apiFetch(endpoint, options = {}) {
     const res = await fetch(`${API_BASE}${endpoint}`, {
         ...options,
@@ -94,26 +94,32 @@ async function apiFetch(endpoint, options = {}) {
             ...options.headers
         }
     });
-    
+
     if (res.status === 401) {
-        logoutBtn.click(); // Auto logout on unauthorized
+        logoutBtn.click();
         throw new Error('Unauthorized');
     }
-    
+
+    // Throw for any other non-OK response so callers can catch it properly
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${res.status}`);
+    }
+
     return res.json();
 }
 
-// ── Data Loading ────────────────────────────────────────────────────────
+// ── Data Loading ──────────────────────────────────────────
 async function loadDashboardData() {
     try {
         const stats = await apiFetch('/dashboard-stats');
         document.getElementById('stat-today-appointments').textContent = stats.today_appointments;
         document.getElementById('stat-total-active').textContent = stats.total_active_appointments;
         document.getElementById('stat-total-doctors').textContent = stats.total_doctors;
-        
-        loadAppointments();
+
+        await loadAppointments();  // await so stats and table are always in sync
     } catch (err) {
-        console.error(err);
+        console.error('loadDashboardData error:', err);
     }
 }
 
@@ -122,7 +128,7 @@ async function loadAppointments() {
         const appointments = await apiFetch('/appointments');
         const tbody = document.querySelector('#appointments-table tbody');
         tbody.innerHTML = '';
-        
+
         appointments.forEach(app => {
             const tr = document.createElement('tr');
             tr.innerHTML = `
@@ -133,22 +139,66 @@ async function loadAppointments() {
                 <td>${app.doctor_name}</td>
                 <td><span class="status-badge status-${app.status}">${app.status}</span></td>
                 <td>
-                    ${app.status === 'BOOKED' ? 
-                        `<button class="btn danger-btn cancel-btn" data-id="${app.id}">Cancel</button>` : 
-                        '-'}
+                    ${app.status === 'BOOKED'
+                        ? `<button class="btn danger-btn cancel-btn" data-id="${app.id}">Cancel</button>`
+                        : '-'}
                 </td>
             `;
             tbody.appendChild(tr);
         });
-        
-        // Add cancel event listeners
-        document.querySelectorAll('.cancel-btn').forEach(btn => {
-            btn.addEventListener('click', cancelAppointment);
-        });
+        // NOTE: no per-button listeners here — handled by event delegation below
     } catch (err) {
-        console.error(err);
+        console.error('loadAppointments error:', err);
     }
 }
+
+// Event delegation: one listener on tbody survives table re-renders and auto-refresh
+document.querySelector('#appointments-table tbody').addEventListener('click', async (e) => {
+    const btn = e.target.closest('.cancel-btn');
+    if (!btn) return;
+
+    // Two-step inline confirmation — no native dialog needed
+    if (!btn.dataset.confirming) {
+        // First click: enter confirm state
+        btn.dataset.confirming = '1';
+        btn.textContent = 'Confirm?';
+        btn.style.background = '#c0392b';
+
+        // Auto-reset if user clicks elsewhere within 4 seconds
+        const reset = () => {
+            if (!btn.dataset.confirming) return;
+            delete btn.dataset.confirming;
+            btn.textContent = 'Cancel';
+            btn.style.background = '';
+        };
+        btn._resetTimer = setTimeout(reset, 4000);
+        document.addEventListener('click', function onOutside(ev) {
+            if (!btn.contains(ev.target)) {
+                clearTimeout(btn._resetTimer);
+                reset();
+                document.removeEventListener('click', onOutside);
+            }
+        });
+        return;
+    }
+
+    // Second click: execute cancel
+    clearTimeout(btn._resetTimer);
+    delete btn.dataset.confirming;
+    const id = btn.getAttribute('data-id');
+    btn.disabled = true;
+    btn.textContent = 'Cancelling…';
+    btn.style.background = '';
+
+    try {
+        await apiFetch(`/appointments/${id}`, { method: 'DELETE' });
+        await loadDashboardData(); // Refresh stats + table
+    } catch (err) {
+        alert(`Failed to cancel: ${err.message}`);
+        btn.disabled = false;
+        btn.textContent = 'Cancel';
+    }
+});
 
 async function loadSlotsAndDoctors() {
     try {
@@ -211,18 +261,7 @@ function renderSlotsTable(slots) {
     });
 }
 
-// ── Actions ─────────────────────────────────────────────────────────────
-async function cancelAppointment(e) {
-    if (!confirm('Are you sure you want to cancel this appointment?')) return;
-    
-    const id = e.target.getAttribute('data-id');
-    try {
-        await apiFetch(`/appointments/${id}`, { method: 'DELETE' });
-        loadDashboardData(); // Refresh UI
-    } catch (err) {
-        alert('Failed to cancel appointment');
-    }
-}
+
 
 document.getElementById('add-slot-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -250,7 +289,7 @@ document.getElementById('add-slot-form').addEventListener('submit', async (e) =>
         document.getElementById('slot-time').value = '';
         
         // Refresh table
-        document.getElementById('filter-doctor').dispatchEvent(new Event('change'));
+        await loadSlotsAndDoctors();
         
     } catch (err) {
         msgDiv.textContent = 'Failed to create slot. It may already exist.';

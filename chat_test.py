@@ -27,7 +27,19 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 import config  # loads .env via load_dotenv()
 from processing.orchestrator import ConversationOrchestrator
-from processing.tts import speak
+
+# TTS is optional — if the module fails to load, voice output is silently disabled.
+try:
+    from processing.tts import speak as _speak
+    _TTS_AVAILABLE = True
+except Exception:
+    _TTS_AVAILABLE = False
+    def _speak(text, language="en"):  # no-op fallback
+        pass
+
+def speak(text: str, language: str = "en") -> None:
+    if _TTS_AVAILABLE:
+        _speak(text, language=language)
 
 # ── Colours (graceful fallback on Windows without ANSI) ───────────────────────
 try:
