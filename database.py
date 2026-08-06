@@ -560,3 +560,29 @@ def find_doctor_slots(doctor_name: str, department: str) -> dict:
     except Exception:
         logger.exception("find_doctor_slots failed | doctor=%s", doctor_name)
         return {"exists": False, "wrong_dept": False, "doctor_id": None, "doctor_name": None, "slots": []}
+
+def get_all_departments() -> list[str]:
+    """Return a list of all active departments."""
+    try:
+        conn = get_connection()
+        rows = conn.execute("SELECT name FROM Departments ORDER BY name").fetchall()
+        conn.close()
+        return [r["name"] for r in rows]
+    except Exception:
+        logger.exception("get_all_departments failed")
+        return []
+
+def get_all_doctors() -> list[dict]:
+    """Return a list of all active doctors with their departments."""
+    try:
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT d.name AS doctor_name, dept.name AS dept_name "
+            "FROM Doctors d JOIN Departments dept ON d.department_id = dept.id "
+            "ORDER BY dept_name, doctor_name"
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        logger.exception("get_all_doctors failed")
+        return []

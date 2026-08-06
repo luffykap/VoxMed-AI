@@ -100,89 +100,95 @@ class BaseNLPEngine(ABC):
 
 class RuleBasedEngine(BaseNLPEngine):
 
-    # ── Semantic pattern groups ───────────────────────────────────────────────
-    # Each entry is a regex pattern (case-insensitive, applied to lowercased text).
-    # Phrase-level patterns beat single-word keyword matching for paraphrases.
+    # ── Weighted semantic pattern groups ──────────────────────────────────────
+    # Each entry is a (regex_pattern, weight) tuple.
+    # Weights reflect pattern specificity:
+    #   3 = Definitive   – unambiguously signals this intent
+    #   2 = Strong       – clear indicator but slightly less specific
+    #   1 = Weak/Generic – could loosely match other intents
+    # Confidence = matched_weight / max_possible_weight
 
-    _PATTERNS: dict[str, list[str]] = {
+    _PATTERNS: dict[str, list[tuple[str, int]]] = {
 
         "book_appointment": [
-            r"\bbook\b.*\b(appointment|consultation|session)\b",
-            r"\bschedule\b.*\b(appointment|consultation|session)\b",
-            r"\bmake\b.*\b(appointment|booking)\b",
-            r"\bfix\b.*\bappointment\b",
-            r"\bset up\b.*\bappointment\b",
-            r"\barrange\b.*\bappointment\b",
-            r"\bregister\b.*\bappointment\b",
-            r"\bi('d| would) like an appointment\b",
-            r"\bi need (to see|to consult|a doctor|an appointment)\b",
-            r"\bi want to (see|meet|consult|visit) (dr\.?|doctor)\b",
-            r"\bcan i see (dr\.?|doctor)\b",
-            r"\b(get|take)\b.*\bappointment\b",
-            r"\blooking for an appointment\b",
-            r"\bconsult with a doctor\b",
+            (r"\bbook\b.*\b(appointment|consultation|session)\b",   3),  # definitive
+            (r"\bschedule\b.*\b(appointment|consultation|session)\b", 3),  # definitive
+            (r"\bmake\b.*\b(appointment|booking)\b",                  3),  # definitive
+            (r"\bfix\b.*\bappointment\b",                             3),  # definitive
+            (r"\bset up\b.*\bappointment\b",                          3),  # definitive
+            (r"\barrange\b.*\bappointment\b",                         3),  # definitive
+            (r"\bregister\b.*\bappointment\b",                        3),  # definitive
+            (r"\bi('d| would) like an appointment\b",                 3),  # definitive
+            (r"\bi need (to see|to consult|a doctor|an appointment)\b", 2),  # strong
+            (r"\bi want to (see|meet|consult|visit) (dr\.?|doctor)\b", 2),  # strong
+            (r"\bcan i see (dr\.?|doctor)\b",                         2),  # strong
+            (r"\b(get|take)\b.*\bappointment\b",                      2),  # strong
+            (r"\blooking for an appointment\b",                        2),  # strong
+            (r"\bconsult with a doctor\b",                             2),  # strong
         ],
 
         "cancel_appointment": [
-            r"\bcancel\b.*\b(appointment|booking|slot|consultation)\b",
-            r"\b(appointment|booking)\b.*\bcancel\b",
-            r"\bcall off\b.*\bappointment\b",
-            r"\bremove\b.*\bappointment\b",
-            r"\bdrop\b.*\bappointment\b",
-            r"\bi (won't|will not|wont) be (coming|there|able to make it)\b",
-            r"\bnot coming\b",
-            r"\bdon't want the appointment\b",
-            r"\bcancel my visit\b",
-            r"\bdelete my booking\b",
-            r"\bwithdraw my appointment\b",
+            (r"\bcancel\b.*\b(appointment|booking|slot|consultation)\b", 3),  # definitive
+            (r"\b(appointment|booking)\b.*\bcancel\b",                   3),  # definitive
+            (r"\bcall off\b.*\bappointment\b",                            3),  # definitive
+            (r"\bcancel my visit\b",                                       3),  # definitive
+            (r"\bdelete my booking\b",                                     3),  # definitive
+            (r"\bwithdraw my appointment\b",                               3),  # definitive
+            (r"\bremove\b.*\bappointment\b",                               2),  # strong
+            (r"\bdrop\b.*\bappointment\b",                                 2),  # strong
+            (r"\bdon't want the appointment\b",                            2),  # strong
+            (r"\bi (won't|will not|wont) be (coming|there|able to make it)\b", 1),  # weak
+            (r"\bnot coming\b",                                            1),  # weak
         ],
 
         "reschedule_appointment": [
-            r"\breschedule\b",
-            r"\b(change|shift|move|push|postpone|defer)\b.*(appointment|slot|booking|it|date|time)\b",
-            r"\b(appointment|slot|booking|it)\b.*(change|shift|move|push|postpone)\b",
-            r"\banother (day|time|slot|date)\b",
-            r"\bdifferent (day|time|slot|date)\b",
-            r"\bcan('t| not|not) make it\b",
-            r"\bwon'?t be able to make it\b",
-            r"\bunable to (come|make it|attend)\b",
-            r"\bput it off\b",
-            r"\bdelay (my|the) appointment\b",
-            r"\bmake it later\b",
-            r"\bmake it earlier\b",
+            (r"\breschedule\b",                                                    3),  # definitive
+            (r"\bdelay (my|the) appointment\b",                                    3),  # definitive
+            (r"\b(change|shift|move|push|postpone|defer)\b.*(appointment|slot|booking|it|date|time)\b", 2),  # strong
+            (r"\b(appointment|slot|booking|it)\b.*(change|shift|move|push|postpone)\b",               2),  # strong
+            (r"\bunable to (come|make it|attend)\b",                               2),  # strong
+            (r"\bwon'?t be able to make it\b",                                    2),  # strong
+            (r"\banother (day|time|slot|date)\b",                                  1),  # weak
+            (r"\bdifferent (day|time|slot|date)\b",                                1),  # weak
+            (r"\bcan('t| not|not) make it\b",                                     1),  # weak
+            (r"\bput it off\b",                                                    1),  # weak
+            (r"\bmake it later\b",                                                 1),  # weak
+            (r"\bmake it earlier\b",                                               1),  # weak
         ],
 
         "check_availability": [
-            r"\b(any|is there a?|check)\b.*(slot|opening|appointment|availability)\b",
-            r"\b(slot|opening|appointment)\b.*(available|open|free|there)\b",
-            r"\bis (dr\.?|doctor)\b.*\bfree\b",
-            r"\bwhen is (the next|a) (slot|appointment|opening)\b",
-            r"\bdo you have (any|an) (opening|slot|appointment)\b",
-            r"\bcan i get a slot\b",
-            r"\bany (slots?|appointments?)\b",
-            r"\bwhat times are available\b",
-            r"\bwhen can i come\b",
+            (r"\bwhen is (the next|a) (slot|appointment|opening)\b",      3),  # definitive
+            (r"\bdo you have (any|an) (opening|slot|appointment)\b",      3),  # definitive
+            (r"\bcan i get a slot\b",                                       3),  # definitive
+            (r"\bwhat times are available\b",                              3),  # definitive
+            (r"\b(any|is there a?|check)\b.*(slot|opening|appointment|availability)\b", 2),  # strong
+            (r"\b(slot|opening|appointment)\b.*(available|open|free|there)\b",          2),  # strong
+            (r"\bis (dr\.?|doctor)\b.*\bfree\b",                          2),  # strong
+            (r"\bany (slots?|appointments?)\b",                            2),  # strong
+            (r"\bwhen can i come\b",                                        1),  # weak
         ],
 
         "general_inquiry": [
-            r"\b(what|when|where|how|which|who)\b.*(clinic|hospital|doctor|fee|cost|hour|timing|address|location)\b",
-            r"\btell me (about|the)\b",
-            r"\b(fee|cost|price|charge)\b.*(consult|appointment|visit)\b",
-            r"\b(timing|hours?|open|close)\b.*(clinic|hospital|doctor)\b",
-            r"\bwhere (is|are)\b.*(clinic|hospital|doctor)\b",
-            r"\bhow much does it cost\b",
-            r"\bare you open\b",
+            (r"\b(what|when|where|how|which|who)\b.*(clinic|hospital|doctor|fee|cost|hour|timing|address|location)\b", 2),  # strong
+            (r"\b(fee|cost|price|charge)\b.*(consult|appointment|visit)\b",  2),  # strong
+            (r"\b(timing|hours?|open|close)\b.*(clinic|hospital|doctor)\b",  2),  # strong
+            (r"\bwhere (is|are)\b.*(clinic|hospital|doctor)\b",               2),  # strong
+            (r"\bhow much does it cost\b",                                     2),  # strong
+            (r"\btell me (about|the)\b",                                       1),  # weak
+            (r"\bare you open\b",                                               1),  # weak
         ],
-        
+
         "affirm": [
-            r"\byes\b", r"\byeah\b", r"\byep\b", r"\byup\b", r"\bcorrect\b",
-            r"\bthat's right\b", r"\bexactly\b", r"\bsure\b", r"\bokay\b", r"\bok\b",
-            r"\bgo ahead\b", r"\bdo it\b", r"\bplease do\b",
+            (r"\byes\b", 2), (r"\byeah\b", 2), (r"\byep\b", 2), (r"\byup\b", 2),
+            (r"\bcorrect\b", 2), (r"\bthat's right\b", 3), (r"\bexactly\b", 2),
+            (r"\bsure\b", 1), (r"\bokay\b", 1), (r"\bok\b", 1),
+            (r"\bgo ahead\b", 2), (r"\bdo it\b", 2), (r"\bplease do\b", 2),
         ],
-        
+
         "deny": [
-            r"\bno\b", r"\bnope\b", r"\bnot\b", r"\bwrong\b", r"\bincorrect\b",
-            r"\bwait\b", r"\bstop\b", r"\bcancel that\b", r"\bdon't\b",
+            (r"\bno\b", 2), (r"\bnope\b", 2), (r"\bwrong\b", 2), (r"\bincorrect\b", 2),
+            (r"\bcancel that\b", 3), (r"\bstop\b", 1), (r"\bwait\b", 1),
+            (r"\bnot\b", 1), (r"\bdon't\b", 1),
         ],
     }
 
@@ -272,14 +278,18 @@ class RuleBasedEngine(BaseNLPEngine):
 
     def _detect_intent(self, lower: str) -> tuple[str, float]:
         """
-        Score each intent by counting how many of its semantic patterns match.
-        Ties are broken by _INTENT_PRIORITY so specific intents beat generic ones.
+        Weighted Regex Scoring:
+        - Each matching pattern contributes its weight (3/2/1) to the intent score.
+        - Ties are broken by _INTENT_PRIORITY so specific intents beat generic ones.
+        - Confidence = matched_weight / max_possible_weight, penalised for ambiguity.
         """
         scores: dict[str, int] = {}
 
         for intent, patterns in self._PATTERNS.items():
             scores[intent] = sum(
-                1 for p in patterns if re.search(p, lower, re.IGNORECASE)
+                weight
+                for pattern, weight in patterns
+                if re.search(pattern, lower, re.IGNORECASE)
             )
 
         best_score = max(scores.values())
@@ -291,9 +301,9 @@ class RuleBasedEngine(BaseNLPEngine):
         candidates = [i for i, s in scores.items() if s == best_score]
         best_intent = max(candidates, key=lambda i: _INTENT_PRIORITY[i])
 
-        # Confidence: matched patterns / total patterns for that intent
-        total_patterns = len(self._PATTERNS[best_intent])
-        raw_confidence = best_score / total_patterns
+        # Confidence: matched weight / max possible weight for that intent
+        max_possible_weight = sum(w for _, w in self._PATTERNS[best_intent])
+        raw_confidence = best_score / max_possible_weight
 
         # Penalise when a competing intent also scored
         competing = [i for i, s in scores.items() if s > 0 and i != best_intent]

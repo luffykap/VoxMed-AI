@@ -13,15 +13,44 @@ Key differences from the old approach:
 from __future__ import annotations
 
 from typing import Any
+import re
 
 import config
-from database import create_call, end_call, save_conversation, save_ai_log
+from database import create_call, end_call, save_conversation, save_ai_log, get_all_departments, get_all_doctors
 from processing.memory import ConversationMemory, REQUIRED_ENTITIES
 from services import llm_client
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+# ── Module-level conversation-control constants ─────────────────────────────────
+
+# Phrases that signal the user wants to STOP the current flow and reset.
+# Checked with regex — no extra LLM call needed.
+_ABORT_PHRASES = re.compile(
+    r"\b(cancel (it|that|this|everything|all)|i want to cancel|never mind|nevermind|"
+    r"forget it|don'?t want|do not want|i changed my mind|start over|"
+    r"i don'?t want to|not anymore|stop this|abort|scratch that|let'?s stop)\b",
+    re.IGNORECASE,
+)
+
+# Phrases that signal the user wants to END the call entirely.
+_FAREWELL_PHRASES = re.compile(
+    r"\b(goodbye|good bye|bye|end (it|the call|this)|i('?ll just)? end it|"
+    r"i don'?t (want|need) (any )?help|no (more )?help|i('?m)? (done|leaving|going)|"
+    r"hang up|stop the call|disconnect|i'?ll call later|call you later)\b",
+    re.IGNORECASE,
+)
+
+# LLM intents that signal the user wants out of the current flow
+_ABORT_INTENTS = {"deny", "out_of_scope", "general_chat"}
+
+# Intents that are valid mid-flow switches (user genuinely changed their mind)
+_SWITCHABLE_INTENTS = {
+    "book_appointment", "cancel_appointment", "reschedule_appointment",
+    "check_availability",
+}
 
 # Predefined slot-filling questions — deterministic, no LLM call needed.
 # Python decides which question to ask (Problem 3); LLM only formats complex replies.
@@ -75,8 +104,12 @@ class ConversationOrchestrator:
     def is_finished(self) -> bool:
         return self._finished
 
-    def get_greeting(self) -> str:
+    def get_greeting(self, lang_code: str = None) -> str:
         greeting = "Welcome to VoxMed AI. How can I help you today?"
+        if lang_code and lang_code != "en":
+            from processing.translator import translate_from_english
+            greeting = translate_from_english(greeting, lang_code)
+            
         save_conversation(self.call_id, "AI", greeting)
         self.memory.add_turn("assistant", greeting)
         self.memory.last_question = greeting
@@ -126,20 +159,67 @@ class ConversationOrchestrator:
             save_ai_log("NLP", "INFO",
                         f"Intent detected: {self.memory.intent} confidence={confidence:.2f}")
         else:
-        # Intent remains locked once detected.
-        # Ignore LLM intent_switch for now. Python owns the conversation workflow.
+            # ── Intent-switch / abort / farewell handling ───────────────────────
             if understanding.get("intent_switch"):
-                logger.warning(
-                "LLM suggested an intent switch, but intent switching is currently ignored. "
-                "Current intent=%s",
-                self.memory.intent,
-            )
+                new_intent      = understanding.get("intent", "")
+                abort_by_text   = bool(_ABORT_PHRASES.search(user_text))
+                abort_by_intent = new_intent in _ABORT_INTENTS
+
+                if abort_by_text or abort_by_intent:
+                    # User wants out — wipe state and offer a fresh start
+                    old_intent = self.memory.intent
+                    self.memory.intent   = None
+                    self.memory.entities = {}
+                    self.memory.turns    = []   # clear history so LLM won't re-detect old intent
+                    save_ai_log("DM", "INFO",
+                                f"Conversation reset: user aborted '{old_intent}'")
+                    logger.info("Intent aborted by user | old=%s", old_intent)
+                    reply = "No problem! Let's start fresh. How can I help you today?"
+                    return self._commit_reply(reply)
+
+                elif new_intent and new_intent in _SWITCHABLE_INTENTS:
+                    # Legitimate switch (e.g. "actually I want to cancel instead")
+                    old_intent = self.memory.intent
+                    self.memory.intent   = new_intent
+                    self.memory.entities = {}
+                    self.memory.turns    = []
+                    save_ai_log("DM", "INFO",
+                                f"Intent switched: {old_intent} → {new_intent}")
+                    logger.info("Intent switched | %s → %s", old_intent, new_intent)
+
+                else:
+                    logger.info("Intent switch ignored (new=%s). Keeping=%s",
+                                new_intent, self.memory.intent)
+
+            # Fallback abort guard: catches abort phrases even when LLM didn't
+            # flag intent_switch (e.g. mid-sentence cancellation like "cancel").
+            elif _ABORT_PHRASES.search(user_text):
+                old_intent = self.memory.intent
+                self.memory.intent   = None
+                self.memory.entities = {}
+                self.memory.turns    = []
+                save_ai_log("DM", "INFO",
+                            f"Abort phrase (no intent_switch) — reset from {old_intent}")
+                logger.info("Intent aborted by user (fallback regex) | old=%s", old_intent)
+                reply = "No problem! Let's start over. How can I help you today?"
+                return self._commit_reply(reply)
 
             save_ai_log(
                 "NLP",
                 "INFO",
-                f"Entities extracted (intent locked={self.memory.intent}): {list(entities.keys())}",
+                f"Entities extracted (intent={self.memory.intent}): {list(entities.keys())}",
             )
+
+        # Farewell check: user wants to end the call entirely.
+        # Runs for BOTH detect_intent=True (no active flow) and locked-intent turns.
+        if _FAREWELL_PHRASES.search(user_text):
+            save_ai_log("DM", "INFO", "Farewell phrase detected — ending call")
+            logger.info("Call ending — farewell phrase detected")
+            self._finished = True
+            end_call(self.call_id)
+            reply = "Thank you for calling VoxMed AI. Take care and stay healthy. Goodbye!"
+            return self._commit_reply(reply)
+
 
         # ⑥ Merge new entities — never overwrites existing (Problem 3)
         self.memory.update_entities(entities)
@@ -160,37 +240,56 @@ class ConversationOrchestrator:
             from database import get_connection
             
             target_date = entities.get("date") or self.memory.entities.get("date")
-            if not target_date or target_date == "ANY":
-                target_date = _date.today().isoformat()
             
             dept = self.memory.entities.get("department", config.DEFAULT_DEPARTMENT)
-            
             conn = get_connection()
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT s.slot_time, doc.name AS doctor_name
-                FROM Slots s
-                JOIN Doctors doc ON s.doctor_id = doc.id
-                JOIN Departments d ON doc.department_id = d.id
-                WHERE s.slot_date = ? AND s.is_booked = 0 AND d.name = ? COLLATE NOCASE
-                ORDER BY s.slot_time
-                LIMIT 3
-                """, (target_date, dept)
-            )
-            slots = cursor.fetchall()
-            conn.close()
-            
-            if slots:
-                times = ", ".join(s["slot_time"] for s in slots)
-                msg = f"On {target_date}, we have free slots at {times}."
+
+            if not target_date or target_date == "ANY":
+                # Find the next available slots from today onwards
+                cursor.execute(
+                    """
+                    SELECT s.slot_date, s.slot_time, doc.name AS doctor_name
+                    FROM Slots s
+                    JOIN Doctors doc ON s.doctor_id = doc.id
+                    JOIN Departments d ON doc.department_id = d.id
+                    WHERE s.slot_date >= ? AND s.is_booked = 0 AND d.name = ? COLLATE NOCASE
+                    ORDER BY s.slot_date, s.slot_time
+                    LIMIT 3
+                    """, (_date.today().isoformat(), dept)
+                )
+                slots = cursor.fetchall()
+                if slots:
+                    times = ", ".join(f"{s['slot_time']} on {s['slot_date']}" for s in slots)
+                    msg = f"We have free slots at {times}."
+                else:
+                    msg = f"Sorry, there are no available slots in {dept} coming up."
             else:
-                msg = f"Sorry, there are no available slots in {dept} on {target_date}."
+                cursor.execute(
+                    """
+                    SELECT s.slot_time, doc.name AS doctor_name
+                    FROM Slots s
+                    JOIN Doctors doc ON s.doctor_id = doc.id
+                    JOIN Departments d ON doc.department_id = d.id
+                    WHERE s.slot_date = ? AND s.is_booked = 0 AND d.name = ? COLLATE NOCASE
+                    ORDER BY s.slot_time
+                    LIMIT 3
+                    """, (target_date, dept)
+                )
+                slots = cursor.fetchall()
+                if slots:
+                    times = ", ".join(s["slot_time"] for s in slots)
+                    msg = f"On {target_date}, we have free slots at {times}."
+                else:
+                    msg = f"Sorry, there are no available slots in {dept} on {target_date}."
+            
+            conn.close()
             
             reply = llm_client.generate_reply(self.memory, {"success": bool(slots), "message": msg}, self.memory.language)
             
             # Steer back to the booking flow
             if missing:
+                next_missing = missing[0]
                 intent_templates = _SLOT_TEMPLATES.get(self.memory.intent, {})
                 slot_question = intent_templates.get(next_missing)
                 if slot_question:
@@ -203,6 +302,24 @@ class ConversationOrchestrator:
 
         if missing:
             next_missing = missing[0]
+
+            # ⑧a Proactive availability check (booking only):
+            #     When date + time are now known but patient_name is still missing,
+            #     verify the slot exists BEFORE collecting the name.
+            #     This prevents asking for the name, then redirecting because the
+            #     slot was unavailable — a confusing UX waste.
+            if (
+                self.memory.intent == "book_appointment"
+                and next_missing == "patient_name"
+                and self.memory.entities.get("date")
+                and self.memory.entities.get("time")
+            ):
+                avail_reply = self._check_slot_before_name()
+                if avail_reply:
+                    # Slot unavailable — alternatives surfaced; ask user to pick first
+                    return self._commit_reply(avail_reply)
+                # Slot is available — fall through to ask for name normally
+
             # ⑧ Use predefined template — zero LLM calls for slot questions (Problem 6)
             intent_templates = _SLOT_TEMPLATES.get(self.memory.intent, {})
             reply = intent_templates.get(next_missing)
@@ -274,20 +391,29 @@ class ConversationOrchestrator:
                 self._finished = False
             else:
                 # Slot unavailable — search for alternatives (Problem 5)
-                alternatives = self._find_alternative_slots()
+                requested_date = ents.get("date")
+                alternatives = self._find_alternative_slots(requested_date)
                 if alternatives:
-                    alt_list = "; ".join(
-                        f"{a['slot_date']} at {a['slot_time']} with {a.get('doctor_name', 'available doctor')}"
-                        for a in alternatives
-                    )
+                    is_same_date = all(a['slot_date'] == requested_date for a in alternatives)
+                    
+                    if is_same_date:
+                        times = ", ".join(f"{a['slot_time']} with {a.get('doctor_name', 'available doctor')}" for a in alternatives)
+                        msg_text = f"That specific time is unavailable. On {requested_date}, we have slots at {times}. Which would you prefer?"
+                    else:
+                        alt_list = "; ".join(
+                            f"{a['slot_date']} at {a['slot_time']} with {a.get('doctor_name', 'available doctor')}"
+                            for a in alternatives
+                        )
+                        msg_text = f"There are no slots available on {requested_date}. The nearest available slots are {alt_list}. Which would you prefer?"
+                        
                     backend_result = {
                         "success": False,
-                        "message": f"That slot is unavailable. Alternatives: {alt_list}. Which would you prefer?",
+                        "message": msg_text,
                     }
-                    # Problem 3: never pop existing entities — only clear the
-                    # specific conflicting slot fields so the user can pick a new one.
-                    # Use None assignment so update_entities can overwrite them next turn.
-                    self.memory.entities["date"] = None
+                    
+                    # Only clear the date if we actually suggested a new date
+                    if not is_same_date:
+                        self.memory.entities["date"] = None
                     self.memory.entities["time"] = None
                     self._finished = False
                 else:
@@ -365,6 +491,50 @@ class ConversationOrchestrator:
             }
             self._finished = True
 
+        elif intent == "medicine_information":
+            backend_result = {"success": True, "facts": "We cannot prescribe medicines over the phone. Please consult a doctor in-person for prescriptions.", "is_qa": True}
+            self._finished = True
+
+        elif intent == "doctor_information":
+            doctors = get_all_doctors()
+            facts = "We have the following doctors: " + ", ".join([f"{d['doctor_name']} ({d['dept_name']})" for d in doctors])
+            backend_result = {"success": True, "facts": facts, "is_qa": True}
+            self._finished = True
+
+        elif intent == "department_information":
+            departments = get_all_departments()
+            facts = "We offer services in the following departments: " + ", ".join(departments)
+            backend_result = {"success": True, "facts": facts, "is_qa": True}
+            self._finished = True
+
+        elif intent == "hospital_timings":
+            backend_result = {"success": True, "facts": "The clinic is open Monday to Saturday, 9 AM to 8 PM.", "is_qa": True}
+            self._finished = True
+
+        elif intent == "insurance_query":
+            backend_result = {"success": True, "facts": "We accept most major health insurance plans including Star Health, Apollo Munich, and Max Bupa.", "is_qa": True}
+            self._finished = True
+
+        elif intent == "parking_query":
+            backend_result = {"success": True, "facts": "We have free valet parking available for all patients at the main entrance.", "is_qa": True}
+            self._finished = True
+
+        elif intent == "cost_query":
+            backend_result = {"success": True, "facts": "Consultation fees start at 500 rupees, but vary depending on the specialist (up to 1500 rupees).", "is_qa": True}
+            self._finished = True
+
+        elif intent == "emergency":
+            backend_result = {"success": True, "message": "If this is a medical emergency, please hang up immediately and dial 112 or your local emergency number."}
+            self._finished = True
+
+        elif intent == "human_agent":
+            backend_result = {"success": True, "message": "Please wait while I connect you to the next available human representative."}
+            self._finished = True
+
+        elif intent == "out_of_scope" or intent == "general_chat":
+            backend_result = {"success": False, "message": "I am a medical assistant designed to help with appointments and clinic info. How can I assist you with your health needs today?"}
+            self._finished = False
+
         else:
             backend_result = {"success": True, "message": ""}
 
@@ -382,10 +552,87 @@ class ConversationOrchestrator:
 
         return reply
 
-    def _find_alternative_slots(self) -> list[dict]:
-        """Search the next 7 days for up to 3 available slots in the same department."""
+    def _check_slot_before_name(self) -> str | None:
+        """
+        Called when date + time are known but patient_name has not been collected yet.
+        Checks whether the requested slot actually exists (is_booked=0).
+
+        Returns:
+            None         – slot is free; caller should proceed to ask for name.
+            str (reply)  – slot is unavailable; LLM-formatted message with alternatives.
+        """
+        from services import appointments as _appt
+        ents = self.memory.entities
+        date = ents.get("date")
+        time = ents.get("time")
+        doctor = ents.get("doctor")
+        dept = ents.get("department", config.DEFAULT_DEPARTMENT)
+
+        # Try to book a dry-run check via the existing slot search
+        alternatives = self._find_alternative_slots(date)
+
+        # Check if any alternative exactly matches the requested date+time+doctor
+        if doctor:
+            # User picked a specific doctor — verify THAT doctor has the slot
+            exact_match = any(
+                a["slot_date"] == date
+                and a["slot_time"] == time
+                and doctor.lower() in a.get("doctor_name", "").lower()
+                for a in alternatives
+            )
+        else:
+            # No doctor preference — any matching date+time is fine
+            exact_match = any(
+                a["slot_date"] == date and a["slot_time"] == time
+                for a in alternatives
+            )
+
+        if exact_match:
+            return None  # Slot is free — no redirect needed
+
+        # Slot unavailable — surface alternatives immediately
+        if alternatives:
+            is_same_date = all(a["slot_date"] == date for a in alternatives)
+            if is_same_date:
+                times = ", ".join(
+                    f"{a['slot_time']} with {a.get('doctor_name', 'available doctor')}"
+                    for a in alternatives
+                )
+                msg = (f"The slot at {time} on {date} is unavailable. "
+                       f"Available slots on {date}: {times}. Which would you prefer?")
+            else:
+                alt_list = "; ".join(
+                    f"{a['slot_date']} at {a['slot_time']} with {a.get('doctor_name', 'available doctor')}"
+                    for a in alternatives
+                )
+                msg = (f"There are no slots available on {date} at {time}. "
+                       f"The nearest available slots are: {alt_list}. Which would you prefer?")
+
+            # Clear the unavailable time (and date if we moved dates) so user can re-pick
+            if not is_same_date:
+                self.memory.entities["date"] = None
+            self.memory.entities["time"] = None
+
+            save_ai_log("DM", "INFO",
+                        f"Proactive slot check: unavailable date={date} time={time} | alternatives={len(alternatives)}")
+            return llm_client.generate_reply(
+                self.memory,
+                {"success": False, "message": msg},
+                self.memory.language,
+            )
+
+        # No alternatives found at all
+        save_ai_log("DM", "WARN", f"Proactive slot check: no slots found at all for dept={dept}")
+        return llm_client.generate_reply(
+            self.memory,
+            {"success": False, "message": f"There are currently no available slots in {dept}. Please try a different date."},
+            self.memory.language,
+        )
+
+    def _find_alternative_slots(self, requested_date: str | None = None) -> list[dict]:
+        """Search for alternatives on the requested date first, then the next 7 days."""
         from database import get_connection
-        from datetime import date as _date, timedelta
+        from datetime import date as _date, timedelta, datetime
 
         dept = self.memory.entities.get("department", config.DEFAULT_DEPARTMENT)
         alternatives: list[dict] = []
@@ -402,9 +649,39 @@ class ConversationOrchestrator:
             return []
 
         dept_id = dept_row["id"]
+        
+        start_date_str = requested_date if requested_date else _date.today().isoformat()
+        
+        # 1. Search on the requested date first
+        cursor.execute(
+            """
+            SELECT s.slot_date, s.slot_time, doc.name AS doctor_name
+            FROM   Slots s
+            JOIN   Doctors doc ON s.doctor_id = doc.id
+            WHERE  doc.department_id = ?
+              AND  s.slot_date = ?
+              AND  s.is_booked = 0
+            ORDER BY s.slot_time
+            LIMIT 3
+            """,
+            (dept_id, start_date_str),
+        )
+        for row in cursor.fetchall():
+            alternatives.append(dict(row))
+            
+        if alternatives:
+            conn.close()
+            logger.info("Alternative slots found on requested date: %d for dept=%s", len(alternatives), dept)
+            return alternatives
+
+        # 2. If no slots on the requested date, search the next 7 days
+        try:
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        except ValueError:
+            start_date = _date.today()
 
         for day_offset in range(1, 8):
-            d = (_date.today() + timedelta(days=day_offset)).isoformat()
+            d = (start_date + timedelta(days=day_offset)).isoformat()
             cursor.execute(
                 """
                 SELECT s.slot_date, s.slot_time, doc.name AS doctor_name

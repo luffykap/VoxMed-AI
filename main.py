@@ -3,6 +3,7 @@ from processing.stt import transcribe
 from processing.orchestrator import ConversationOrchestrator
 from processing.tts import speak
 from utils.logger import get_logger
+from processing.translator import translate_from_english
 
 logger = get_logger(__name__)
 
@@ -35,7 +36,7 @@ def main():
 
     # Initial greeting
     _print_divider()
-    greeting = dm.get_greeting()
+    greeting = dm.get_greeting(lang_code)
     print(f"\n[AI]: {greeting}\n")
     speak(greeting, language=lang_code or "en")
 
@@ -52,10 +53,14 @@ def main():
             retry_count += 1
             if retry_count >= 3:
                 msg = "I'm having trouble hearing you. Please try calling back later."
+                if lang_code and lang_code != "en":
+                    msg = translate_from_english(msg, lang_code)
                 print(f"\n[AI]: {msg}\n")
                 speak(msg, language=lang_code or "en")
                 break
             msg = "Could not transcribe audio. Please try again."
+            if lang_code and lang_code != "en":
+                msg = translate_from_english(msg, lang_code)
             print(f"\n[AI]: {msg}")
             speak(msg, language=lang_code or "en")
             continue
@@ -64,10 +69,14 @@ def main():
             retry_count += 1
             if retry_count >= 3:
                 msg = "I'm having trouble understanding you. Please try calling back later."
+                if lang_code and lang_code != "en":
+                    msg = translate_from_english(msg, lang_code)
                 print(f"\n[AI]: {msg}\n")
                 speak(msg, language=lang_code or "en")
                 break
             msg = "I didn't quite catch that. Please speak clearly and try again."
+            if lang_code and lang_code != "en":
+                msg = translate_from_english(msg, lang_code)
             print(f"\n[AI]: {msg}")
             speak(msg, language=lang_code or "en")
             continue
@@ -83,6 +92,7 @@ def main():
         print(f"\n[You]: {stt_result['text']}")
 
         # ── Stage 2 & 3: Orchestrator (LLM understand + reply) ───────────────
+        retry_count = 0  # Reset on successful transcription
         ai_response = dm.process(stt_result["text"])
         
         _print_divider()

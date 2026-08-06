@@ -45,6 +45,10 @@ def _get_legacy_engine():
 
 _legacy_engine = None
 
+# Tracks when a provider is allowed to be used again (Unix timestamp)
+# Used to temporarily skip rate-limited providers.
+_provider_cooldowns: dict[str, float] = {}
+COOLDOWN_SECONDS = 60.0
 
 # ── Prompt builders ───────────────────────────────────────────────────────────
 
@@ -53,15 +57,15 @@ _SYSTEM_DETECT_INTENT = (
     "You are an NLP engine for a medical appointment booking system.\n"
     "This is the FIRST message. Detect the user's goal and extract any entities mentioned.\n\n"
     "Return EXACTLY this JSON:\n"
-    '{{"intent": "<book_appointment|cancel_appointment|reschedule_appointment|check_availability|general_inquiry>",'
+    '{{"intent": "<book_appointment|cancel_appointment|reschedule_appointment|check_availability|medicine_information|doctor_information|department_information|hospital_timings|insurance_query|parking_query|cost_query|emergency|human_agent|general_chat|out_of_scope>",'
     ' "entities": {{}}, "confidence": 0.0}}\n\n'
     "Entity rules (include ONLY what is explicitly in this message):\n"
     "- patient_name: only if stated ('my name is X', 'for X')\n"
     "- doctor: 'Dr. Lastname' format\n"
     "- department: medical department name\n"
     "- symptoms: list of symptom strings\n"
-    "- date: YYYY-MM-DD (today: {today}). If user says 'anytime', 'whenever', or 'any day', extract 'ANY'.\n"
-    "  IMPORTANT: only extract dates that are today ({today}) or in the future. Ignore past dates.\n"
+    "- date: YYYY-MM-DD. If user says 'anytime', 'whenever', or 'any day', extract 'ANY'.\n"
+    "  IMPORTANT: explicitly resolve relative words like 'tomorrow', 'next week', 'monday' into YYYY-MM-DD using Today ({today}) as the reference. Ignore past dates.\n"
     "- time: HH:MM 24h. If user says 'anytime', 'whenever', or 'any time', extract 'ANY'.\n"
     "- For reschedule_appointment: use 'current_date' for the existing appointment date, "
     "'new_date' for the desired new date, 'new_time' for the desired new time (all YYYY-MM-DD / HH:MM).\n"
@@ -82,11 +86,12 @@ _SYSTEM_EXTRACT_ENTITIES = (
     "- side_query: If the user asks a question instead of answering (e.g. 'what slots are free today?'), extract the core intent here (e.g., 'check_availability').\n"
     "- Include only entity keys that are NEW or CHANGED in this message.\n"
     "- intent_switch=true ONLY if user explicitly abandons current goal ('cancel instead', 'forget it').\n"
-    "- date: YYYY-MM-DD. time: HH:MM 24h. If user says 'anytime' or 'whichever', extract 'ANY' for both.\n"
-    "  IMPORTANT: only extract dates that are today ({today}) or in the future. Ignore past dates.\n"
+    "- date: YYYY-MM-DD. time: HH:MM 24h. If user says 'anytime' or 'whichever', extract 'ANY'. If they ask about general dates, extract 'ANY' for date.\n"
+    "  IMPORTANT: explicitly resolve relative words like 'tomorrow', 'next week', 'monday' into YYYY-MM-DD using Today ({today}) as the reference. Ignore past dates.\n"
     "- For reschedule_appointment: use 'current_date' for the existing appointment date, "
     "'new_date' for the desired new date, 'new_time' for the desired new time.\n"
     "- patient_name: only if explicitly stated.\n"
+    "- IMPORTANT: If the assistant previously offered alternative slots (e.g. '09:00 with Dr. Sharma') and the user accepts one (e.g. 'Dr. Sharma is okay'), you MUST extract the implied 'time' (09:00) and 'date' from that context.\n"
     "Output raw JSON only. No markdown."
 )
 
@@ -95,13 +100,13 @@ _REPLY_SYSTEM = """\
 You are VoxMed AI, an appointment booking voice assistant (IVR-style).
 Reply in {language}.
 Rules — strictly enforced:
-- Maximum 1 sentence, under 15 words.
+- Maximum 2 sentences, under 25 words.
 - Professional, neutral, direct.
 - No empathy, sympathy, apologies, or filler.
 - Forbidden: "I understand", "I'm sorry", "Certainly", "Of course", "I hope",
   "Thank you for", "I see", "Great", "Sure", "Absolutely".
 - No greetings after the first turn.
-- State the outcome or ask one thing. Nothing else.\
+- IMPORTANT: If a requested slot or date is unavailable, you MUST explicitly state that it is unavailable first, before asking the user to choose an alternative.\
 """
 
 
@@ -139,9 +144,16 @@ def _build_reply_messages(
     """Build a compact message list for Stage 2 (complex outcomes only)."""
     system = _REPLY_SYSTEM.format(language=language)
     if backend_result:
-        success = backend_result.get("success", False)
-        msg     = backend_result.get("message", "")
-        ctx     = f"Outcome: {'success' if success else 'failed'}. Relay in one direct sentence: {msg!r}"
+        if backend_result.get("is_qa"):
+            user_question = memory.turns[-1]["content"] if memory.turns else ""
+            facts = backend_result.get("facts", "")
+            ctx = (
+                f"The user asked: {user_question!r}\n"
+                f"Answer their question in one direct sentence using ONLY these facts: {facts}"
+            )
+        else:
+            msg = backend_result.get("message", "")
+            ctx = f"Relay this information to the user in one direct sentence: {msg!r}"
     else:
         ctx = "Ask how else you can help."
     return [
@@ -227,18 +239,32 @@ def _call_with_failover(
             logger.debug("Skipping provider %s -- no API key configured", name)
             continue
 
+        if time.time() < _provider_cooldowns.get(name, 0):
+            logger.debug("Skipping provider %s -- currently on cooldown", name)
+            continue
+
         logger.info("Trying provider %s (model=%s)", name, provider_cfg.get("model"))
 
         try:
             result = _call_provider(name, provider_cfg, messages, json_mode, max_tokens)
             logger.info("LLM provider %s succeeded", name)
+            # Clear cooldown on success, just in case
+            _provider_cooldowns.pop(name, None)
             return result
 
         except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as exc:
-            logger.warning(
-                "Provider %s failed (%s: %s) -- trying next",
-                name, type(exc).__name__, exc,
-            )
+            # If rate limited, apply cooldown
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
+                logger.warning(
+                    "Provider %s rate-limited (429) -- placing on %ds cooldown",
+                    name, COOLDOWN_SECONDS
+                )
+                _provider_cooldowns[name] = time.time() + COOLDOWN_SECONDS
+            else:
+                logger.warning(
+                    "Provider %s failed (%s: %s) -- trying next",
+                    name, type(exc).__name__, exc,
+                )
             last_exc = exc
             continue
 
@@ -281,7 +307,7 @@ def understand(
 
         if detect_intent:
             result = {
-                "intent":     parsed.get("intent", "general_inquiry"),
+                "intent":     parsed.get("intent", "out_of_scope"),
                 "entities":   parsed.get("entities") or {},
                 "confidence": float(parsed.get("confidence", 0.7)),
             }

@@ -26,3 +26,19 @@ def translate_to_english(text: str, source_lang_code: str) -> str:
     except Exception as e:
         logger.exception("Translation failed | error=%s", str(e))
         return text  # Fallback to original text if translation fails
+
+def translate_from_english(text: str, target_lang_code: str) -> str:
+    """Translates text from English to target language."""
+    if not text or not target_lang_code:
+        return text
+        
+    lang_prefix = target_lang_code.split('-')[0]
+    if lang_prefix == "en":
+        return text
+        
+    try:
+        translator = GoogleTranslator(source='en', target=lang_prefix)
+        return translator.translate(text)
+    except Exception as e:
+        logger.exception("Translation to %s failed | error=%s", lang_prefix, str(e))
+        return text

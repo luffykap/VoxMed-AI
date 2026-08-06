@@ -19,7 +19,7 @@ AUDIO_RATE = 44100          # Sample rate in Hz
 AUDIO_DURATION = 50         # Default recording duration in seconds
 TEMP_AUDIO_FILE = str(OUTPUT_DIR / "temp_recording.wav")
 SILENCE_THRESHOLD = 500     # RMS amplitude below which audio is considered silent
-SILENCE_DURATION  = 6.0     # Seconds of continuous silence before recording stops
+SILENCE_DURATION  = 4.0     # Seconds of continuous silence before recording stops
 
 # ── Language Settings ──────────────────────────────────────────
 SUPPORTED_LANGUAGES = {
