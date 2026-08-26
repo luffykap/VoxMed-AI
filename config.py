@@ -19,7 +19,7 @@ AUDIO_RATE = 44100          # Sample rate in Hz
 AUDIO_DURATION = 50         # Default recording duration in seconds
 TEMP_AUDIO_FILE = str(OUTPUT_DIR / "temp_recording.wav")
 SILENCE_THRESHOLD = 500     # RMS amplitude below which audio is considered silent
-SILENCE_DURATION  = 4.0     # Seconds of continuous silence before recording stops
+SILENCE_DURATION  = 0.6     # Seconds of continuous silence before recording stops
 
 # ── Language Settings ──────────────────────────────────────────
 SUPPORTED_LANGUAGES = {
@@ -31,7 +31,7 @@ SUPPORTED_LANGUAGES = {
 DEFAULT_LANGUAGE = "1"  # English
 
 # ── Whisper (faster-whisper) ───────────────────────────────────
-WHISPER_MODEL        = "large-v3"  # Options: large-v3, turbo, medium, small
+WHISPER_MODEL        = "tiny"  # Options: tiny, base, small, medium, large-v3 (tiny = fastest on CPU)
 WHISPER_DEVICE       = "cpu"
 WHISPER_COMPUTE_TYPE = "int8"
 
@@ -116,7 +116,7 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "voxmed123")
 LLM_TEMPERATURE               = 0.1
 LLM_MAX_TOKENS_UNDERSTANDING  = 250
 LLM_MAX_TOKENS_RESPONSE       = 80
-LLM_TIMEOUT                   = 30
+LLM_TIMEOUT                   = 20  # Seconds before giving up on a provider and trying the next
 
 # ── LLM — per-provider credentials ────────────────────────────
 # Each entry: (env_var_name, base_url, model)
@@ -129,18 +129,11 @@ LLM_PROVIDERS: dict[str, dict] = {
     "groq": {
         "api_key":  os.getenv("GROQ_API_KEY", ""),
         "base_url": "https://api.groq.com/openai/v1",
-        "model":    "llama-3.3-70b-versatile",
+        "model":    "openai/gpt-oss-20b",  # confirmed available on this Groq account
+        "json_mode": False,  # gpt-oss-20b returns 400 for response_format json_object
     },
-    "cerebras": {
-        "api_key":  os.getenv("CEREBRAS_API_KEY", ""),
-        "base_url": "https://api.cerebras.ai/v1",
-        "model":    "gpt-oss-120b",
-    },
-    "mistral": {
-        "api_key":  os.getenv("MISTRAL_API_KEY", ""),
-        "base_url": "https://api.mistral.ai/v1",
-        "model":    "mistral-small-latest",
-    },
+    # cerebras: disabled — account requires payment (402)
+    # mistral:  disabled — invalid API key (401)
     "openrouter": {
         "api_key":  os.getenv("OPENROUTER_API_KEY", ""),
         "base_url": "https://openrouter.ai/api/v1",
@@ -148,8 +141,8 @@ LLM_PROVIDERS: dict[str, dict] = {
     },
 }
 
-# Failover order: Gemini → Groq → Cerebras → Mistral → OpenRouter
-LLM_PROVIDER_CHAIN: list[str] = ["gemini", "groq", "cerebras", "mistral", "openrouter"]
+# Failover order: Gemini (primary) → Groq (fast backup) → OpenRouter (last resort)
+LLM_PROVIDER_CHAIN: list[str] = ["gemini", "groq", "openrouter"]
 
 # ── Admin Dashboard Credentials ────────────────────────────────
 ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")

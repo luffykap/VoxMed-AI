@@ -198,7 +198,7 @@ def _call_provider(
     # use its own default so responses aren't truncated.
     if max_tokens and provider_name != "gemini":
         payload["max_tokens"] = max_tokens
-    if json_mode:
+    if json_mode and provider_cfg.get("json_mode", True):
         payload["response_format"] = {"type": "json_object"}
 
     t0 = time.perf_counter()
@@ -376,6 +376,9 @@ def generate_reply(
 
     try:
         reply = _call_with_failover(messages, json_mode=False, max_tokens=config.LLM_MAX_TOKENS_RESPONSE).strip()
+        if not reply:  # guard: some models return empty content strings
+            logger.warning("LLM generate_reply returned empty string — using template fallback")
+            return _fallback_reply(backend_result)
         logger.info("LLM generate_reply | length=%d chars", len(reply))
         return reply
     except (httpx.HTTPError, httpx.TimeoutException, KeyError, RuntimeError) as exc:

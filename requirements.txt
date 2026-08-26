@@ -2,6 +2,8 @@
 faster-whisper
 pyaudio==0.2.14
 pyttsx3==2.90
+edge-tts
+
 
 # NLP / Translation
 deep-translator==1.11.4

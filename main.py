@@ -65,7 +65,7 @@ def main():
             speak(msg, language=lang_code or "en")
             continue
 
-        if stt_result["confidence"] < 0.4:
+        if stt_result["confidence"] < 0.15:  # tiny model produces lower scores than large-v3
             retry_count += 1
             if retry_count >= 3:
                 msg = "I'm having trouble understanding you. Please try calling back later."
@@ -81,13 +81,19 @@ def main():
             speak(msg, language=lang_code or "en")
             continue
 
-        # If user selected Auto-Detect, update the language dynamically
+        # If user selected Auto-Detect, update the language dynamically.
+        # Only accept the detected language if it's one we support AND
+        # the tiny model is confident enough (prob > 0.85) to avoid
+        # misclassifying Indian-accent English as Swahili / French / etc.
         if auto_detect:
             detected_lang = stt_result.get("language")
-            if detected_lang:
+            lang_prob      = stt_result.get("lang_prob", 0)
+            _SUPPORTED_ISO = {"en", "hi", "kn", "te"}
+            if detected_lang and detected_lang in _SUPPORTED_ISO:
                 iso_to_name = {"en": "English", "hi": "Hindi", "kn": "Kannada", "te": "Telugu"}
                 lang_code = detected_lang
                 dm.memory.language = iso_to_name.get(detected_lang, "English")
+
 
         print(f"\n[You]: {stt_result['text']}")
 

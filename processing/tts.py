@@ -1,47 +1,56 @@
 """
 processing/tts.py
 -----------------
-Text-to-Speech using gTTS (Google Text-to-Speech) and macOS afplay.
+Text-to-Speech using edge-tts (streaming) and macOS ffplay.
 """
 import os
 import subprocess
-from gtts import gTTS
+import asyncio
+import edge_tts
 import config
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+async def _speak_streaming(text: str, voice: str) -> None:
+    comm = edge_tts.Communicate(text, voice)
+    # Using ffplay for instant playback by reading from standard input
+    proc = subprocess.Popen(["ffplay", "-i", "pipe:0", "-nodisp", "-autoexit", "-loglevel", "quiet"], stdin=subprocess.PIPE)
+    
+    try:
+        async for chunk in comm.stream():
+            if chunk["type"] == "audio":
+                proc.stdin.write(chunk["data"])
+    except Exception as exc:
+        logger.exception("Error during edge-tts streaming: %s", exc)
+    finally:
+        if proc.stdin:
+            proc.stdin.close()
+        proc.wait()
+
 def speak(text: str, language: str = "en") -> None:
     """
-    Speak the given text aloud using Google TTS.
-    Saves to a temporary MP3 file and plays it using macOS native afplay.
+    Speak the given text aloud using edge-tts.
+    Streams the audio directly to ffplay for instant playback without waiting for full generation.
     """
     if not text or not text.strip():
         return
 
     try:
-        logger.info("TTS speaking (lang=%s, length=%d chars) via gTTS", language, len(text))
+        logger.info("TTS speaking (lang=%s, length=%d chars) via edge-tts", language, len(text))
         
-        # Map our internal language codes to gTTS standard codes
+        # Map our internal language codes to edge-tts voices
         lang_map = {
-            "en": "en",
-            "hi": "hi",
-            "kn": "kn",
-            "te": "te"
+            "en": "en-US-AriaNeural",
+            "hi": "hi-IN-SwaraNeural",
+            "kn": "kn-IN-SapnaNeural",
+            "te": "te-IN-ShrutiNeural"
         }
-        gtts_lang = lang_map.get(language, "en")
-
-        # Generate MP3 using Google TTS
-        tts = gTTS(text=text, lang=gtts_lang, slow=False)
-        temp_audio = str(config.OUTPUT_DIR / "temp_tts.mp3")
-        tts.save(temp_audio)
         
-        # Play the audio using macOS native afplay
-        subprocess.run(["afplay", temp_audio])
+        voice = lang_map.get(language, "en-US-AriaNeural")
         
-        # Cleanup
-        if os.path.exists(temp_audio):
-            os.remove(temp_audio)
+        # Run the async streaming function
+        asyncio.run(_speak_streaming(text, voice))
             
     except Exception as exc:
         logger.exception("TTS speak failed: %s", exc)

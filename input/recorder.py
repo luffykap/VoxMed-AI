@@ -35,9 +35,10 @@ def record_audio(
     )
 
     frames: list[bytes] = []
-    silent_chunks = 0
-    max_chunks    = int(rate / chunk * max_duration)
-    silence_limit = int(rate / chunk * silence_duration)
+    silent_chunks   = 0
+    speech_detected = False   # only start silence countdown AFTER speech begins
+    max_chunks      = int(rate / chunk * max_duration)
+    silence_limit   = int(rate / chunk * silence_duration)
 
     try:
         for _ in range(max_chunks):
@@ -45,14 +46,18 @@ def record_audio(
             frames.append(data)
 
             rms = audioop.rms(data, 2)  # 2 bytes per sample for paInt16
-            if rms < silence_threshold:
-                silent_chunks += 1
+            if rms >= silence_threshold:
+                speech_detected = True   # user has started speaking
+                silent_chunks   = 0
             else:
-                silent_chunks = 0
+                silent_chunks += 1
 
-            if silent_chunks >= silence_limit:
+            # Only stop early once speech was detected AND silence follows.
+            # This prevents cutting out before the user has even started speaking.
+            if speech_detected and silent_chunks >= silence_limit:
                 logger.info(
-                    "Silence detected | silent_chunks=%d | stopping early", silent_chunks
+                    "Silence detected after speech | silent_chunks=%d | stopping early",
+                    silent_chunks,
                 )
                 break
 

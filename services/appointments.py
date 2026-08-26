@@ -9,20 +9,48 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+def _clean_patient_name(raw: str) -> str:
+    """
+    Normalise a patient name coming from STT/LLM:
+    - Strip surrounding whitespace
+    - Remove common filler prefixes ("My name is", "It's", etc.)
+    - Deduplicate repeated words (e.g. "Couple Couple" → "Couple")
+    - Title-case the result
+    """
+    import re
+    name = raw.strip()
+    # Remove filler prefixes
+    name = re.sub(
+        r"^(it'?s|its|the (patient'?s? )?name is|name is|patient is|"
+        r"my name is|i am|i'?m|call me|for|the name is)\s+",
+        "", name, flags=re.IGNORECASE,
+    ).strip()
+    # Deduplicate consecutive repeated words: "Couple Couple" → "Couple"
+    words = name.split()
+    deduped: list[str] = []
+    for w in words:
+        if not deduped or w.lower() != deduped[-1].lower():
+            deduped.append(w)
+    name = " ".join(deduped)
+    return name.title()
+
 def _get_or_create_patient(name: str, phone: str = None) -> int:
+    clean = _clean_patient_name(name)
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id FROM Patients WHERE name = ? COLLATE NOCASE", (name,))
+    # Use LIKE for a fuzzy match to avoid duplicates from minor STT variations
+    cursor.execute("SELECT id FROM Patients WHERE name LIKE ? COLLATE NOCASE", (clean,))
     row = cursor.fetchone()
     if row:
         patient_id = row['id']
     else:
-        cursor.execute("INSERT INTO Patients (name, phone) VALUES (?, ?)", (name, phone))
+        cursor.execute("INSERT INTO Patients (name, phone) VALUES (?, ?)", (clean, phone))
         conn.commit()
         patient_id = cursor.lastrowid
-        logger.info("Created new patient: %s", name)
+        logger.info("Created new patient: %s", clean)
     conn.close()
     return patient_id
+
 
 def _map_symptoms_to_department(symptoms: list[str] | None) -> str | None:
     if not symptoms:
