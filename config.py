@@ -129,8 +129,19 @@ LLM_PROVIDERS: dict[str, dict] = {
     "groq": {
         "api_key":  os.getenv("GROQ_API_KEY", ""),
         "base_url": "https://api.groq.com/openai/v1",
+        "model":    "qwen/qwen3.6-27b",  # supports json_mode; large, capable model on Groq
+    },
+    "groq_120b": {
+        "api_key":  os.getenv("GROQ_API_KEY", ""),
+        "base_url": "https://api.groq.com/openai/v1",
+        "model":    "openai/gpt-oss-120b",  # largest model available on this Groq account
+        "json_mode": False,  # gpt-oss models return 400 for response_format json_object
+    },
+    "groq_20b": {
+        "api_key":  os.getenv("GROQ_API_KEY", ""),
+        "base_url": "https://api.groq.com/openai/v1",
         "model":    "openai/gpt-oss-20b",  # confirmed available on this Groq account
-        "json_mode": False,  # gpt-oss-20b returns 400 for response_format json_object
+        "json_mode": False,  # gpt-oss models return 400 for response_format json_object
     },
     # cerebras: disabled — account requires payment (402)
     # mistral:  disabled — invalid API key (401)
@@ -141,8 +152,8 @@ LLM_PROVIDERS: dict[str, dict] = {
     },
 }
 
-# Failover order: Gemini (primary) → Groq (fast backup) → OpenRouter (last resort)
-LLM_PROVIDER_CHAIN: list[str] = ["gemini", "groq", "openrouter"]
+# Failover order: Gemini (primary) → Groq Qwen-27B (json-capable) → Groq 120B → Groq 20B → OpenRouter
+LLM_PROVIDER_CHAIN: list[str] = ["gemini", "groq", "groq_120b", "groq_20b", "openrouter"]
 
 # ── Admin Dashboard Credentials ────────────────────────────────
 ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")

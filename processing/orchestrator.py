@@ -52,6 +52,16 @@ _SWITCHABLE_INTENTS = {
     "check_availability",
 }
 
+# Confirmation yes/no patterns (no LLM needed for simple affirm/deny)
+_CONFIRM_YES = re.compile(
+    r"\b(yes|yeah|yep|yup|correct|confirm|confirmed|ok|okay|sure|go ahead|book it|do it|that'?s right|right|perfect|sounds good)\b",
+    re.IGNORECASE,
+)
+_CONFIRM_NO = re.compile(
+    r"\b(no|nope|nah|wrong|incorrect|change|wait|actually|different|not that|not right|cancel that|let me|i want to change)\b",
+    re.IGNORECASE,
+)
+
 # Predefined slot-filling questions — deterministic, no LLM call needed.
 # Python decides which question to ask (Problem 3); LLM only formats complex replies.
 _SLOT_TEMPLATES = {
@@ -95,6 +105,8 @@ class ConversationOrchestrator:
         self.call_id  = create_call()
         self._finished = False
         self._reschedule_attempts = 0   # counts consecutive failed reschedule slot tries
+        self._awaiting_confirmation = False   # True when waiting for user to confirm booking
+        self._confirmation_summary: str = ""  # the summary text shown to user before confirming
         logger.info("ConversationOrchestrator initialized | call_id=%s | lang=%s",
                     self.call_id, language)
 
@@ -137,6 +149,10 @@ class ConversationOrchestrator:
         # ① Log user turn
         self.memory.add_turn("user", user_text)
         save_conversation(self.call_id, "Patient", user_text)
+
+        # ① Handle pending booking confirmation before any LLM call
+        if self._awaiting_confirmation:
+            return self._handle_confirmation(user_text)
 
         # ② Determine mode (Problem 1 — intent lock)
         detect_intent = self.memory.intent is None
@@ -334,7 +350,91 @@ class ConversationOrchestrator:
             return self._commit_reply(reply)
 
         # ⑨ All entities present — execute intent
+        # For book_appointment: pause for user confirmation first
+        if self.memory.intent == "book_appointment" and not self._awaiting_confirmation:
+            return self._request_booking_confirmation()
+
         reply = self._execute_intent()
+        return self._commit_reply(reply)
+
+    # ── Booking confirmation ──────────────────────────────────────────────────
+
+    def _request_booking_confirmation(self) -> str:
+        """
+        Build a human-readable booking summary and ask the user to confirm.
+        Sets _awaiting_confirmation = True so the next turn is handled as yes/no.
+        """
+        ents = self.memory.entities
+        doctor   = ents.get("doctor") or "an available doctor"
+        date     = ents.get("date") or "?"
+        time     = ents.get("time") or "?"
+        name     = ents.get("patient_name") or "the patient"
+        symptoms = ents.get("symptoms")
+        dept     = ents.get("department", config.DEFAULT_DEPARTMENT)
+
+        summary_parts = [f"Booking {doctor}"]
+        if symptoms:
+            symp_str = ", ".join(symptoms) if isinstance(symptoms, list) else symptoms
+            summary_parts.append(f"for {symp_str}")
+        else:
+            summary_parts.append(f"in {dept}")
+        summary_parts.append(f"on {date} at {time} for {name}")
+
+        self._confirmation_summary = " ".join(summary_parts)
+        self._awaiting_confirmation = True
+
+        reply = f"{self._confirmation_summary}. Shall I confirm? (Yes / No)"
+        logger.info("Awaiting booking confirmation | summary=%s", self._confirmation_summary)
+        save_ai_log("DM", "INFO", f"Confirmation requested: {self._confirmation_summary}")
+        return self._commit_reply(reply)
+
+    def _handle_confirmation(self, user_text: str) -> str:
+        """
+        Process the user's yes/no response to the booking confirmation prompt.
+        - Yes  → execute the booking
+        - No   → ask what to change, clear that slot
+        - Other → re-ask the confirmation question
+        """
+        if _CONFIRM_YES.search(user_text):
+            # User confirmed — execute the booking
+            self._awaiting_confirmation = False
+            logger.info("Booking confirmed by user")
+            save_ai_log("DM", "INFO", "Booking confirmed by user")
+            reply = self._execute_intent()
+            return self._commit_reply(reply)
+
+        if _CONFIRM_NO.search(user_text):
+            # User wants to change something — figure out which slot to clear
+            self._awaiting_confirmation = False
+            ents = self.memory.entities
+
+            # Heuristic: check which entity the user mentioned
+            text_lower = user_text.lower()
+            if any(w in text_lower for w in ("date", "day", "when")):
+                self.memory.entities["date"] = None
+                self.memory.entities["time"] = None
+                reply = "No problem. What date would you prefer?"
+            elif any(w in text_lower for w in ("time", "hour", "o'clock", "am", "pm")):
+                self.memory.entities["time"] = None
+                reply = "Sure. What time would you prefer?"
+            elif any(w in text_lower for w in ("doctor", "dr", "physician")):
+                self.memory.entities["doctor"] = None
+                reply = "Understood. Which doctor would you like to see?"
+            elif any(w in text_lower for w in ("name", "patient")):
+                self.memory.entities["patient_name"] = None
+                reply = "Of course. What is the patient's name?"
+            else:
+                # Can't tell what to change — clear date/time and restart slot filling
+                self.memory.entities["date"] = None
+                self.memory.entities["time"] = None
+                reply = "No problem. What changes would you like to make? Let's start with the date."
+
+            logger.info("Booking cancelled by user — re-entering slot filling")
+            save_ai_log("DM", "INFO", "Booking cancelled by user, re-entering slot fill")
+            return self._commit_reply(reply)
+
+        # Unclear response — repeat the confirmation question
+        reply = f"I didn't catch that. {self._confirmation_summary}. Please say Yes to confirm or No to change details."
         return self._commit_reply(reply)
 
     # ── Intent execution ──────────────────────────────────────────────────────
