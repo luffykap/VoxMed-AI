@@ -158,3 +158,25 @@ LLM_PROVIDER_CHAIN: list[str] = ["gemini", "groq", "groq_120b", "groq_20b", "ope
 # ── Admin Dashboard Credentials ────────────────────────────────
 ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "voxmed123")
+
+# ── Twilio (Phase 10) ─────────────────────────────────────────
+TWILIO_ACCOUNT_SID:  str = os.getenv("TWILIO_ACCOUNT_SID",  "")
+TWILIO_AUTH_TOKEN:   str = os.getenv("TWILIO_AUTH_TOKEN",   "")
+TWILIO_PHONE_NUMBER: str = os.getenv("TWILIO_PHONE_NUMBER", "")
+
+# ── Cloud STT — OpenAI Whisper API (Phase 10) ─────────────────
+# If OPENAI_API_KEY is set, processing/stt.py uses the Whisper API
+# instead of the local faster-whisper model.
+OPENAI_API_KEY:       str = os.getenv("OPENAI_API_KEY", "")
+OPENAI_WHISPER_MODEL: str = os.getenv("OPENAI_WHISPER_MODEL", "whisper-1")
+
+# ── Cloud TTS (Phase 10) ──────────────────────────────────────
+# Provider chain: ElevenLabs → gTTS+pygame → pyttsx3
+ELEVENLABS_API_KEY:  str = os.getenv("ELEVENLABS_API_KEY",  "")
+ELEVENLABS_VOICE_ID: str = os.getenv("ELEVENLABS_VOICE_ID", "Rachel")
+GOOGLE_APPLICATION_CREDENTIALS: str = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+
+# ── Deployment (Phase 10) ─────────────────────────────────────
+# Set to your public Railway/Render URL once deployed (used for Twilio callbacks
+# and CORS origin enforcement).
+PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000")
