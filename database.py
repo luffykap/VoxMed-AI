@@ -23,6 +23,7 @@ _USE_POSTGRES = bool(config.DATABASE_URL)
 
 _schema_ensured = False
 _cleanup_done   = False
+_psycopg2_patched = False
 
 # ── Thin compatibility wrapper ────────────────────────────────────────────────
 # psycopg2 uses %s placeholders; sqlite3 uses ?.
@@ -31,6 +32,9 @@ _cleanup_done   = False
 def _adapt_sql(sql: str) -> str:
     """Replace SQLite-style ? placeholders with PostgreSQL %s."""
     if _USE_POSTGRES:
+        sql = sql.replace("LIKE ? COLLATE NOCASE", "ILIKE %s")
+        sql = sql.replace("= ? COLLATE NOCASE", "ILIKE %s")
+        sql = sql.replace("COLLATE NOCASE", "")
         return sql.replace("?", "%s")
     return sql
 
@@ -57,10 +61,25 @@ def get_connection():
     Schema is ensured (CREATE IF NOT EXISTS) once per process on first call.
     """
     global _schema_ensured
+    global _psycopg2_patched
 
     if _USE_POSTGRES:
         import psycopg2
         from psycopg2.extras import RealDictCursor
+
+        if not _psycopg2_patched:
+            original_execute = RealDictCursor.execute
+            original_executemany = RealDictCursor.executemany
+
+            def patched_execute(self, query, vars=None):
+                return original_execute(self, _adapt_sql(query), _adapt_params(vars) if vars else None)
+                
+            def patched_executemany(self, query, vars_list):
+                return original_executemany(self, _adapt_sql(query), [_adapt_params(v) for v in vars_list])
+
+            RealDictCursor.execute = patched_execute
+            RealDictCursor.executemany = patched_executemany
+            _psycopg2_patched = True
 
         conn = psycopg2.connect(config.DATABASE_URL, cursor_factory=RealDictCursor)
         conn.autocommit = False  # explicit transaction control matches sqlite3 behaviour
