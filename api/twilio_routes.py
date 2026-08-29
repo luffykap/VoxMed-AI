@@ -54,12 +54,51 @@ async def twilio_incoming(request: Request):
     
     logger.info("Incoming Twilio call | CallSid=%s", call_sid)
 
-    dm = ConversationOrchestrator(language="English")
+    response = VoiceResponse()
+    gather = Gather(
+        numDigits=1,
+        action="/twilio/language_selected",
+        method="POST",
+        timeout=5
+    )
+    gather.say("Welcome to VoxMed AI. Press 1 for English. Hindi ke liye 2 dabaye. Kannada gaagi 3 otti. Telugu kosam 4 nokkandi.", language="en-IN")
+    response.append(gather)
+    
+    # Fallback if the user doesn't press anything
+    response.redirect("/twilio/language_selected?Digits=1", method="POST")
+    
+    return HTMLResponse(content=str(response), media_type="application/xml")
+
+@router.post("/twilio/language_selected")
+async def twilio_language_selected(request: Request):
+    """Webhook triggered after language is selected."""
+    form_data = await request.form()
+    call_sid = form_data.get("CallSid", "")
+    
+    # Check form_data first, then query_params for fallback redirect
+    digits = form_data.get("Digits") or request.query_params.get("Digits", "1")
+    
+    if digits == "2":
+        language = "Hindi"
+        lang_code = "hi"
+    elif digits == "3":
+        language = "Kannada"
+        lang_code = "kn"
+    elif digits == "4":
+        language = "Telugu"
+        lang_code = "te"
+    else:
+        language = "English"
+        lang_code = "en"
+        
+    logger.info("Language selected | CallSid=%s | Digits=%s | Language=%s", call_sid, digits, language)
+
+    dm = ConversationOrchestrator(language=language)
     active_calls[call_sid] = dm
 
-    greeting = dm.get_greeting(lang_code="en")
+    greeting = dm.get_greeting(lang_code=lang_code)
     
-    twiml = get_twiml_response(greeting, dm.is_finished, lang_code="en")
+    twiml = get_twiml_response(greeting, dm.is_finished, lang_code=lang_code)
     return HTMLResponse(content=twiml, media_type="application/xml")
 
 
