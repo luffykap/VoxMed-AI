@@ -2,6 +2,7 @@ services:
   - type: web
     name: voxmed-ai
     env: python
+    plan: free
     buildCommand: pip install -r requirements-prod.txt
     startCommand: uvicorn api.server:app --host 0.0.0.0 --port $PORT
     envVars:

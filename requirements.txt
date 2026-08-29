@@ -11,6 +11,7 @@ deep-translator==1.11.4
 # Backend API
 fastapi==0.111.0
 uvicorn==0.29.0
+twilio==8.2.1
 
 # Utilities
 python-dotenv==1.0.1

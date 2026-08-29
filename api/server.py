@@ -7,8 +7,12 @@ import secrets
 import config
 from database import get_connection
 from pathlib import Path
+from api.twilio_routes import router as twilio_router
 
 app = FastAPI(title="VoxMed Admin API")
+
+# Include Twilio Webhooks
+app.include_router(twilio_router)
 
 # Setup CORS
 app.add_middleware(
