@@ -62,7 +62,15 @@
 - [x] Full test suite in `tests/`
 - [x] Edge case handling
 
-## 🔲 PHASE 10: Deployment & API Migration (Not Started)
-- Twilio integration
-- Cloud STT/TTS APIs
-- Production deployment
+## ✅ PHASE 10: Deployment & API Migration
+### Done
+- [x] Updated `config.py` – added Twilio, OpenAI Whisper, ElevenLabs, PUBLIC_BASE_URL keys
+- [x] Updated `.env` – Phase 10 placeholder keys with comments
+- [x] `processing/stt.py` – added `transcribe_audio_bytes()` with OpenAI Whisper API → local faster-whisper fallback
+- [x] `processing/tts.py` – rewritten with provider chain: ElevenLabs → gTTS+pygame → pyttsx3; added `synthesize_bytes()` for Twilio
+- [x] `api/twilio_webhook.py` – Twilio Voice webhook (incoming, gather, status, audio serving)
+- [x] `api/server.py` – mounted Twilio router, added `/health`, slowapi rate limiting, tightened CORS
+- [x] `requirements.txt` – added twilio, openai, elevenlabs, gtts, pygame, slowapi
+- [x] `Procfile` – Railway/Render start command
+- [x] `railway.json` – Railway deployment config with health check
+- [x] `Dockerfile` – multi-stage production container
