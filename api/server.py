@@ -38,7 +38,7 @@ from slowapi.errors import RateLimitExceeded  # type: ignore
 from slowapi.util import get_remote_address  # type: ignore
 
 import config
-from database import get_connection
+from database import get_connection, _USE_POSTGRES, _adapt_sql, _adapt_params
 
 # ── Rate limiter ──────────────────────────────────────────────────────────────
 limiter = Limiter(key_func=get_remote_address)
@@ -137,7 +137,10 @@ def delete_appointment(
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT slot_id FROM Appointments WHERE id = ?", (appointment_id,))
+    cursor.execute(
+        _adapt_sql("SELECT slot_id FROM Appointments WHERE id = ?"),
+        _adapt_params([appointment_id]),
+    )
     row = cursor.fetchone()
 
     if not row:
@@ -145,9 +148,14 @@ def delete_appointment(
         raise HTTPException(status_code=404, detail="Appointment not found")
 
     slot_id = row["slot_id"]
-    cursor.execute("UPDATE Slots SET is_booked = 0 WHERE id = ?", (slot_id,))
+    booked_false = False if _USE_POSTGRES else 0
     cursor.execute(
-        "UPDATE Appointments SET status = 'CANCELED' WHERE id = ?", (appointment_id,)
+        _adapt_sql("UPDATE Slots SET is_booked = ? WHERE id = ?"),
+        _adapt_params([booked_false, slot_id]),
+    )
+    cursor.execute(
+        _adapt_sql("UPDATE Appointments SET status = 'CANCELED' WHERE id = ?"),
+        _adapt_params([appointment_id]),
     )
     conn.commit()
     conn.close()
@@ -190,10 +198,10 @@ def get_slots(
     params = []
 
     if doctor_id:
-        query += " AND s.doctor_id = ?"
+        query += _adapt_sql(" AND s.doctor_id = ?")
         params.append(doctor_id)
     if date:
-        query += " AND s.slot_date = ?"
+        query += _adapt_sql(" AND s.slot_date = ?")
         params.append(date)
 
     query += " ORDER BY s.slot_date, s.slot_time"
@@ -214,8 +222,10 @@ def create_slot(
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "INSERT INTO Slots (doctor_id, slot_date, slot_time, is_booked) VALUES (?, ?, ?, ?)",
-            (slot.doctor_id, slot.slot_date, slot.slot_time, slot.is_booked),
+            _adapt_sql(
+                "INSERT INTO Slots (doctor_id, slot_date, slot_time, is_booked) VALUES (?, ?, ?, ?)"
+            ),
+            _adapt_params([slot.doctor_id, slot.slot_date, slot.slot_time, slot.is_booked]),
         )
         conn.commit()
     except Exception as exc:
@@ -234,12 +244,15 @@ def get_dashboard_stats(request: Request, username: str = Depends(verify_credent
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        _adapt_sql("""
         SELECT COUNT(a.id) as count
         FROM Appointments a
         JOIN Slots s ON a.slot_id = s.id
         WHERE s.slot_date = ? AND a.status = 'BOOKED'
-    """, (today,))
+        """),
+        _adapt_params([today]),
+    )
     today_appointments = cursor.fetchone()["count"]
 
     cursor.execute("SELECT COUNT(id) as count FROM Doctors")

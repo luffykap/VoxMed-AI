@@ -9,7 +9,13 @@ load_dotenv()  # loads .env from the project root into os.environ
 BASE_DIR = Path(__file__).resolve().parent
 INPUT_DIR = BASE_DIR / "input"
 OUTPUT_DIR = BASE_DIR / "output"
-DB_PATH = BASE_DIR / "voxmed.db"
+
+# ── Database Settings ──────────────────────────────────────────
+# DATABASE_URL: set this env var to use PostgreSQL (production / Render).
+# When not set the app falls back to the local SQLite file (voxmed.db).
+DATABASE_URL: str = os.getenv("DATABASE_URL", "")
+DB_PATH = BASE_DIR / "voxmed.db"  # Used only when DATABASE_URL is not set
+DB_ECHO = False  # Set True to log all SQL queries (for debugging)
 
 # ── Audio Settings ─────────────────────────────────────────────
 AUDIO_CHUNK = 1024          # Number of frames per buffer
@@ -34,9 +40,6 @@ DEFAULT_LANGUAGE = "1"  # English
 WHISPER_MODEL        = "tiny"  # Options: tiny, base, small, medium, large-v3 (tiny = fastest on CPU)
 WHISPER_DEVICE       = "cpu"
 WHISPER_COMPUTE_TYPE = "int8"
-
-# ── Database Settings ──────────────────────────────────────────
-DB_ECHO = False  # Set True to log all SQL queries (for debugging)
 
 # ── Logging ────────────────────────────────────────────────────
 LOG_FILE = str(BASE_DIR / "output" / "voxmed.log")
