@@ -319,7 +319,10 @@ def understand(
             }
         # Normalize common LLM entity aliases to our canonical schema
         entities = result.get("entities", {})
-
+        if not isinstance(entities, dict):
+            logger.warning("LLM returned non-dict entities: %s", entities)
+            entities = {}
+            
         aliases = {
             "appointment_date": "date",
             "booking_date": "date",

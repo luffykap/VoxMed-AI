@@ -776,8 +776,8 @@ class ConversationOrchestrator:
 
         # 2. If no slots on the requested date, search the next 7 days
         try:
-            start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
-        except ValueError:
+            start_date = datetime.strptime(str(start_date_str), "%Y-%m-%d").date()
+        except (ValueError, TypeError):
             start_date = _date.today()
 
         for day_offset in range(1, 8):
