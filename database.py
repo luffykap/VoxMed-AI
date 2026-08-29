@@ -26,15 +26,14 @@ _cleanup_done   = False
 _psycopg2_patched = False
 
 # ── Thin compatibility wrapper ────────────────────────────────────────────────
-# psycopg2 uses %s placeholders; sqlite3 uses ?.
-# All SQL in this file uses ? — when running against PostgreSQL we swap them.
-
 def _adapt_sql(sql: str) -> str:
     """Replace SQLite-style ? placeholders with PostgreSQL %s."""
     if _USE_POSTGRES:
         sql = sql.replace("LIKE ? COLLATE NOCASE", "ILIKE %s")
         sql = sql.replace("= ? COLLATE NOCASE", "ILIKE %s")
         sql = sql.replace("COLLATE NOCASE", "")
+        sql = sql.replace("is_booked = 0", "is_booked = FALSE")
+        sql = sql.replace("is_booked = 1", "is_booked = TRUE")
         return sql.replace("?", "%s")
     return sql
 
