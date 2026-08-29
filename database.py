@@ -69,6 +69,8 @@ def get_connection():
         if not _psycopg2_patched:
             original_execute = RealDictCursor.execute
             original_executemany = RealDictCursor.executemany
+            original_fetchone = RealDictCursor.fetchone
+            original_fetchall = RealDictCursor.fetchall
 
             def patched_execute(self, query, vars=None):
                 return original_execute(self, _adapt_sql(query), _adapt_params(vars) if vars else None)
@@ -76,8 +78,30 @@ def get_connection():
             def patched_executemany(self, query, vars_list):
                 return original_executemany(self, _adapt_sql(query), [_adapt_params(v) for v in vars_list])
 
+            import datetime
+            def _cast_dates(row):
+                if row:
+                    for k, v in row.items():
+                        if isinstance(v, datetime.time):
+                            row[k] = str(v)[:5]
+                        elif isinstance(v, datetime.date):
+                            row[k] = str(v)
+                return row
+
+            def patched_fetchone(self):
+                return _cast_dates(original_fetchone(self))
+
+            def patched_fetchall(self):
+                rows = original_fetchall(self)
+                if rows:
+                    for r in rows:
+                        _cast_dates(r)
+                return rows
+
             RealDictCursor.execute = patched_execute
             RealDictCursor.executemany = patched_executemany
+            RealDictCursor.fetchone = patched_fetchone
+            RealDictCursor.fetchall = patched_fetchall
             _psycopg2_patched = True
 
         conn = psycopg2.connect(config.DATABASE_URL, cursor_factory=RealDictCursor)
