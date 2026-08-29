@@ -9,7 +9,13 @@ load_dotenv()  # loads .env from the project root into os.environ
 BASE_DIR = Path(__file__).resolve().parent
 INPUT_DIR = BASE_DIR / "input"
 OUTPUT_DIR = BASE_DIR / "output"
-DB_PATH = BASE_DIR / "voxmed.db"
+
+# ── Database Settings ──────────────────────────────────────────
+# DATABASE_URL: set this env var to use PostgreSQL (production / Render).
+# When not set the app falls back to the local SQLite file (voxmed.db).
+DATABASE_URL: str = os.getenv("DATABASE_URL", "")
+DB_PATH = BASE_DIR / "voxmed.db"  # Used only when DATABASE_URL is not set
+DB_ECHO = False  # Set True to log all SQL queries (for debugging)
 
 # ── Audio Settings ─────────────────────────────────────────────
 AUDIO_CHUNK = 1024          # Number of frames per buffer
@@ -34,9 +40,6 @@ DEFAULT_LANGUAGE = "1"  # English
 WHISPER_MODEL        = "tiny"  # Options: tiny, base, small, medium, large-v3 (tiny = fastest on CPU)
 WHISPER_DEVICE       = "cpu"
 WHISPER_COMPUTE_TYPE = "int8"
-
-# ── Database Settings ──────────────────────────────────────────
-DB_ECHO = False  # Set True to log all SQL queries (for debugging)
 
 # ── Logging ────────────────────────────────────────────────────
 LOG_FILE = str(BASE_DIR / "output" / "voxmed.log")
@@ -159,3 +162,25 @@ LLM_PROVIDER_CHAIN: list[str] = ["gemini", "groq", "groq_120b", "groq_20b", "ope
 # ── Admin Dashboard Credentials ────────────────────────────────
 ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "voxmed123")
+
+# ── Twilio (Phase 10) ─────────────────────────────────────────
+TWILIO_ACCOUNT_SID:  str = os.getenv("TWILIO_ACCOUNT_SID",  "")
+TWILIO_AUTH_TOKEN:   str = os.getenv("TWILIO_AUTH_TOKEN",   "")
+TWILIO_PHONE_NUMBER: str = os.getenv("TWILIO_PHONE_NUMBER", "")
+
+# ── Cloud STT — OpenAI Whisper API (Phase 10) ─────────────────
+# If OPENAI_API_KEY is set, processing/stt.py uses the Whisper API
+# instead of the local faster-whisper model.
+OPENAI_API_KEY:       str = os.getenv("OPENAI_API_KEY", "")
+OPENAI_WHISPER_MODEL: str = os.getenv("OPENAI_WHISPER_MODEL", "whisper-1")
+
+# ── Cloud TTS (Phase 10) ──────────────────────────────────────
+# Provider chain: ElevenLabs → gTTS+pygame → pyttsx3
+ELEVENLABS_API_KEY:  str = os.getenv("ELEVENLABS_API_KEY",  "")
+ELEVENLABS_VOICE_ID: str = os.getenv("ELEVENLABS_VOICE_ID", "Rachel")
+GOOGLE_APPLICATION_CREDENTIALS: str = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+
+# ── Deployment (Phase 10) ─────────────────────────────────────
+# Set to your public Railway/Render URL once deployed (used for Twilio callbacks
+# and CORS origin enforcement).
+PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000")
