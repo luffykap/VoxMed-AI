@@ -129,7 +129,8 @@ LLM_PROVIDERS: dict[str, dict] = {
     "groq": {
         "api_key":  os.getenv("GROQ_API_KEY", ""),
         "base_url": "https://api.groq.com/openai/v1",
-        "model":    "llama-3.3-70b-versatile",  # fast model without reasoning tokens
+        "model":    "groq/compound-mini",
+        "json_mode": True,
     },
     "groq_120b": {
         "api_key":  os.getenv("GROQ_API_KEY", ""),

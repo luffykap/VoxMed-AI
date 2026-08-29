@@ -85,12 +85,31 @@ def _map_symptoms_to_department(symptoms: list[str] | None) -> str | None:
         conn.close()
 
 def _get_doctor_id(doctor_name: str, cursor) -> Optional[int]:
-    """Find doctor ID. Very basic match for now."""
+    """Find doctor ID. Uses fuzzy matching to handle STT spelling errors."""
     if not doctor_name:
         return None
-    cursor.execute("SELECT id FROM Doctors WHERE name LIKE ?", (f"%{doctor_name}%",))
-    row = cursor.fetchone()
-    return row['id'] if row else None
+        
+    cursor.execute("SELECT id, name FROM Doctors")
+    doctors = cursor.fetchall()
+    
+    import difflib
+    req = doctor_name.lower().replace('dr.', '').replace('dr ', '').strip()
+    
+    best_match = None
+    best_score = 0
+    
+    for row in doctors:
+        act = row['name'].lower().replace('dr.', '').replace('dr ', '').strip()
+        # Direct substring match
+        if req and act and (req in act or act in req):
+            return row['id']
+            
+        score = difflib.SequenceMatcher(None, req, act).ratio()
+        if score > best_score and score > 0.6:
+            best_score = score
+            best_match = row['id']
+            
+    return best_match
 
 def book_appointment(name: str, doctor: str, department: str, symptoms: list[str], date: str, time: str) -> tuple[bool, str, dict]:
     from datetime import date as _date

@@ -132,7 +132,6 @@ def _build_understand_messages(
 
     messages = [{"role": "system", "content": system}]
     messages.extend(memory.to_context_snippet())
-    messages.append({"role": "user", "content": user_text})
     return messages
 
 
@@ -202,6 +201,8 @@ def _call_provider(
         payload["response_format"] = {"type": "json_object"}
 
     t0 = time.perf_counter()
+    if provider_name == "groq":
+        logger.error(f"Groq payload: {payload}")
     with httpx.Client(timeout=config.LLM_TIMEOUT) as client:
         response = client.post(
             f"{provider_cfg['base_url']}/chat/completions",

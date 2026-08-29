@@ -163,8 +163,12 @@ class ConversationOrchestrator:
         # ④ Handle LLM unavailability (Problem 4 — never fall back to legacy NLP)
         if understanding.get("_api_unavailable"):
             logger.warning("LLM unavailable — preserving memory, asking user to retry")
-            reply = "The system is momentarily unavailable. Please repeat your message."
-            return self._commit_reply(reply)
+            # Pop the user message that was just added so we don't get consecutive user messages
+            if self.memory.turns and self.memory.turns[-1]["role"] == "user":
+                self.memory.turns.pop()
+            # Do NOT commit this as a standard AI reply so it doesn't pollute context,
+            # but we do want the user to hear it.
+            return "The system is momentarily unavailable. Please repeat your message."
 
         entities = understanding.get("entities") or {}
 
@@ -674,12 +678,22 @@ class ConversationOrchestrator:
         # Check if any alternative exactly matches the requested date+time+doctor
         if doctor:
             # User picked a specific doctor — verify THAT doctor has the slot
-            exact_match = any(
-                a["slot_date"] == date
-                and a["slot_time"] == time
-                and doctor.lower() in a.get("doctor_name", "").lower()
-                for a in alternatives
-            )
+            def _doc_match(req: str, act: str) -> bool:
+                r = req.lower().replace('dr.', '').replace('dr ', '').strip()
+                a = act.lower().replace('dr.', '').replace('dr ', '').strip()
+                if not r or not a: return False
+                if r in a or a in r: return True
+                import difflib
+                return difflib.SequenceMatcher(None, r, a).ratio() > 0.6
+
+            exact_match = False
+            for a in alternatives:
+                if (a["slot_date"] == date and a["slot_time"] == time and 
+                    _doc_match(doctor, a.get("doctor_name", ""))):
+                    exact_match = True
+                    # Update to correct DB spelling so booking won't fail later
+                    self.memory.entities["doctor"] = a.get("doctor_name")
+                    break
         else:
             # No doctor preference — any matching date+time is fine
             exact_match = any(
