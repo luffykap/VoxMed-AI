@@ -119,12 +119,6 @@ async def twilio_process(request: Request):
         response.hangup()
         return HTMLResponse(content=str(response), media_type="application/xml")
 
-    if not speech_result:
-        twiml = get_twiml_response("I didn't quite catch that. Could you repeat?", dm.is_finished)
-        return HTMLResponse(content=twiml, media_type="application/xml")
-
-    reply_text = dm.process(speech_result)
-    
     lang_code = "en"
     if dm.memory.language:
         lang_name = dm.memory.language.lower()
@@ -135,6 +129,23 @@ async def twilio_process(request: Request):
         elif "telugu" in lang_name:
             lang_code = "te"
 
+    if not speech_result:
+        reply_text = "I didn't quite catch that. Could you repeat?"
+        if lang_code != "en":
+            from processing.translator import translate_from_english
+            reply_text = translate_from_english(reply_text, lang_code)
+        twiml = get_twiml_response(reply_text, dm.is_finished, lang_code=lang_code)
+        return HTMLResponse(content=twiml, media_type="application/xml")
+
+    if lang_code != "en":
+        from processing.translator import translate_to_english, translate_from_english
+        english_speech = translate_to_english(speech_result, lang_code)
+        logger.info("Translated speech to English | Original=%s | English=%s", speech_result, english_speech)
+        reply_text_eng = dm.process(english_speech)
+        reply_text = translate_from_english(reply_text_eng, lang_code)
+    else:
+        reply_text = dm.process(speech_result)
+        
     twiml = get_twiml_response(reply_text, dm.is_finished, lang_code=lang_code)
     
     if dm.is_finished:
@@ -154,5 +165,20 @@ async def twilio_process_silence(request: Request):
         response.hangup()
         return HTMLResponse(content=str(response), media_type="application/xml")
 
-    twiml = get_twiml_response("Please let me know how I can help.", dm.is_finished)
+    lang_code = "en"
+    if dm.memory.language:
+        lang_name = dm.memory.language.lower()
+        if "hindi" in lang_name:
+            lang_code = "hi"
+        elif "kannada" in lang_name:
+            lang_code = "kn"
+        elif "telugu" in lang_name:
+            lang_code = "te"
+
+    reply_text = "Please let me know how I can help."
+    if lang_code != "en":
+        from processing.translator import translate_from_english
+        reply_text = translate_from_english(reply_text, lang_code)
+
+    twiml = get_twiml_response(reply_text, dm.is_finished, lang_code=lang_code)
     return HTMLResponse(content=twiml, media_type="application/xml")
