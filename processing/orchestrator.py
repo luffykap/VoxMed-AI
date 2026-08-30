@@ -239,7 +239,15 @@ class ConversationOrchestrator:
                 self.memory.turns.pop()
             # Do NOT commit this as a standard AI reply so it doesn't pollute context,
             # but we do want the user to hear it.
-            return "The system is momentarily unavailable. Please repeat your message."
+            _UNAVAILABLE_PHRASES = {
+                "english": "The system is momentarily unavailable. Please repeat your message.",
+                "hindi": "सिस्टम फिलहाल अनुपलब्ध है। कृपया अपना संदेश दोहराएं।",
+                "kannada": "ಸಿಸ್ಟಮ್ ಸದ್ಯಕ್ಕೆ ಲಭ್ಯವಿಲ್ಲ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಸಂದೇಶವನ್ನು ಪುನರಾವರ್ತಿಸಿ.",
+                "telugu": "సిస్టమ్ ప్రస్తుతం అందుబాటులో లేదు. దయచేసి మీ సందేశాన్ని పునరావృతం చేయండి."
+            }
+            lang_key = self.memory.language.lower() if self.memory.language else "english"
+            if lang_key not in _UNAVAILABLE_PHRASES: lang_key = "english"
+            return _UNAVAILABLE_PHRASES[lang_key]
 
         entities = understanding.get("entities") or {}
 
