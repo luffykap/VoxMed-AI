@@ -3,6 +3,7 @@ from processing.stt import transcribe
 from processing.orchestrator import ConversationOrchestrator
 from processing.tts import speak
 from utils.logger import get_logger
+import asyncio
 
 logger = get_logger(__name__)
 
@@ -38,7 +39,7 @@ def _print_divider():
     print("-" * 50)
 
 
-def main():
+async def main():
     print("=== VoxMed AI ===")
     print("Select Language:")
     print("[0] Auto-Detect")
@@ -120,7 +121,7 @@ def main():
 
         # ── Stage 2 & 3: Orchestrator (LLM understand + reply) ───────────────
         retry_count = 0  # Reset on successful transcription
-        ai_response = dm.process(stt_result["text"])
+        ai_response = await dm.process(stt_result["text"])
         
         _print_divider()
         print(f"\n[AI]: {ai_response}\n")
@@ -129,4 +130,4 @@ def main():
     print("\nConversation ended. Goodbye!")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

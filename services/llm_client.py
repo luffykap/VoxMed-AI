@@ -167,7 +167,7 @@ def _build_reply_messages(
 
 
 
-def _call_provider(
+async def _call_provider(
     provider_name: str,
     provider_cfg: dict,
     messages: list[dict],
@@ -175,7 +175,7 @@ def _call_provider(
     max_tokens: int | None = None,
 ) -> str:
     """
-    Make one synchronous call to a single LLM provider.
+    Make one asynchronous call to a single LLM provider.
     Returns the assistant message content string.
     Raises httpx.HTTPStatusError on retryable HTTP errors.
     Raises httpx.TimeoutException / httpx.ConnectError on network issues.
@@ -205,8 +205,8 @@ def _call_provider(
     t0 = time.perf_counter()
     if provider_name == "groq":
         logger.error(f"Groq payload: {payload}")
-    with httpx.Client(timeout=config.LLM_TIMEOUT) as client:
-        response = client.post(
+    async with httpx.AsyncClient(timeout=config.LLM_TIMEOUT) as client:
+        response = await client.post(
             f"{provider_cfg['base_url']}/chat/completions",
             headers=headers,
             json=payload,
@@ -223,7 +223,7 @@ def _call_provider(
     return data["choices"][0]["message"]["content"]
 
 
-def _call_with_failover(
+async def _call_with_failover(
     messages: list[dict],
     json_mode: bool = False,
     max_tokens: int | None = None,
@@ -249,7 +249,7 @@ def _call_with_failover(
         logger.info("Trying provider %s (model=%s)", name, provider_cfg.get("model"))
 
         try:
-            result = _call_provider(name, provider_cfg, messages, json_mode, max_tokens)
+            result = await _call_provider(name, provider_cfg, messages, json_mode, max_tokens)
             logger.info("LLM provider %s succeeded", name)
             # Clear cooldown on success, just in case
             _provider_cooldowns.pop(name, None)
@@ -279,7 +279,7 @@ def _call_with_failover(
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def understand(
+async def understand(
     memory: ConversationMemory,
     user_text: str,
     detect_intent: bool = True,
@@ -305,7 +305,7 @@ def understand(
     messages = _build_understand_messages(memory, user_text, detect_intent)
 
     try:
-        raw = _call_with_failover(messages, json_mode=True, max_tokens=config.LLM_MAX_TOKENS_UNDERSTANDING)
+        raw = await _call_with_failover(messages, json_mode=True, max_tokens=config.LLM_MAX_TOKENS_UNDERSTANDING)
         parsed = json.loads(raw)
 
         if detect_intent:
@@ -359,7 +359,7 @@ def understand(
         return {"_api_unavailable": True}
 
 
-def generate_reply(
+async def generate_reply(
     memory: ConversationMemory,
     backend_result: dict | None,
     language: str = "en",
@@ -381,7 +381,7 @@ def generate_reply(
     messages = _build_reply_messages(memory, backend_result, language)
 
     try:
-        reply = _call_with_failover(messages, json_mode=False, max_tokens=config.LLM_MAX_TOKENS_RESPONSE).strip()
+        reply = (await _call_with_failover(messages, json_mode=False, max_tokens=config.LLM_MAX_TOKENS_RESPONSE)).strip()
         if not reply:  # guard: some models return empty content strings
             logger.warning("LLM generate_reply returned empty string — using template fallback")
             return _fallback_reply(backend_result)
@@ -398,7 +398,7 @@ def _fallback_reply(backend_result: dict | None) -> str:
         return backend_result.get("message", "Action completed.")
     return "How else can I help you?"
 
-def infer_department(symptoms: list[str]) -> str:
+async def infer_department(symptoms: list[str]) -> str:
     """
     Auto-learning feature: Infer the best medical department from a list of unknown symptoms.
     Uses the LLM to classify.
@@ -433,7 +433,7 @@ def infer_department(symptoms: list[str]) -> str:
     ]
     
     try:
-        reply = _call_with_failover(messages, json_mode=False, max_tokens=15).strip()
+        reply = (await _call_with_failover(messages, json_mode=False, max_tokens=15)).strip()
         logger.info("LLM infer_department inferred: %s", reply)
         for d in departments:
             if d.lower() in reply.lower():

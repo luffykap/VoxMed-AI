@@ -136,7 +136,7 @@ class ConversationOrchestrator:
         self.memory.last_question = greeting
         return greeting
 
-    def process(self, user_text: str) -> str:
+    async def process(self, user_text: str) -> str:
         """
         Full pipeline for one user turn.
         Orchestrator owns the workflow; LLM is a helper only.
@@ -167,7 +167,7 @@ class ConversationOrchestrator:
         detect_intent = self.memory.intent is None
 
         # ③ LLM Stage 1
-        understanding = llm_client.understand(self.memory, user_text, detect_intent=detect_intent)
+        understanding = await llm_client.understand(self.memory, user_text, detect_intent=detect_intent)
 
         # ④ Handle LLM unavailability (Problem 4 — never fall back to legacy NLP)
         if understanding.get("_api_unavailable"):
@@ -203,7 +203,7 @@ class ConversationOrchestrator:
                     save_ai_log("DM", "INFO",
                                 f"Conversation reset: user aborted '{old_intent}'")
                     logger.info("Intent aborted by user | old=%s", old_intent)
-                    reply = llm_client.generate_reply(self.memory, {"success": True, "message": "No problem! Let's start fresh. How can I help you today?"}, self.memory.language)
+                    reply = await llm_client.generate_reply(self.memory, {"success": True, "message": "No problem! Let's start fresh. How can I help you today?"}, self.memory.language)
                     return self._commit_reply(reply)
 
                 elif new_intent and new_intent in _SWITCHABLE_INTENTS:
@@ -230,7 +230,7 @@ class ConversationOrchestrator:
                 save_ai_log("DM", "INFO",
                             f"Abort phrase (no intent_switch) — reset from {old_intent}")
                 logger.info("Intent aborted by user (fallback regex) | old=%s", old_intent)
-                reply = llm_client.generate_reply(self.memory, {"success": True, "message": "No problem! Let's start over. How can I help you today?"}, self.memory.language)
+                reply = await llm_client.generate_reply(self.memory, {"success": True, "message": "No problem! Let's start over. How can I help you today?"}, self.memory.language)
                 return self._commit_reply(reply)
 
             save_ai_log(
@@ -246,7 +246,7 @@ class ConversationOrchestrator:
             logger.info("Call ending — farewell phrase detected")
             self._finished = True
             end_call(self.call_id)
-            reply = llm_client.generate_reply(self.memory, {"success": True, "message": "Thank you for calling VoxMed AI. Take care and stay healthy. Goodbye!"}, self.memory.language)
+            reply = await llm_client.generate_reply(self.memory, {"success": True, "message": "Thank you for calling VoxMed AI. Take care and stay healthy. Goodbye!"}, self.memory.language)
             return self._commit_reply(reply)
 
 
@@ -314,7 +314,7 @@ class ConversationOrchestrator:
             
             conn.close()
             
-            reply = llm_client.generate_reply(self.memory, {"success": bool(slots), "message": msg}, self.memory.language)
+            reply = await llm_client.generate_reply(self.memory, {"success": bool(slots), "message": msg}, self.memory.language)
             
             # Steer back to the booking flow
             if missing:
@@ -323,7 +323,7 @@ class ConversationOrchestrator:
                 slot_question = intent_templates.get(next_missing)
                 if slot_question:
                     if self.memory.language and self.memory.language.lower() not in ("en", "english"):
-                        slot_question = llm_client.generate_reply(self.memory, {"success": True, "message": f"Ask the user: {slot_question}"}, self.memory.language)
+                        slot_question = await llm_client.generate_reply(self.memory, {"success": True, "message": f"Ask the user: {slot_question}"}, self.memory.language)
                     reply = f"{reply} {slot_question}"
                     
             save_ai_log("DM", "INFO", f"Side query handled. reply_len={len(reply)}")
@@ -343,7 +343,7 @@ class ConversationOrchestrator:
                 and self.memory.entities.get("date")
                 and self.memory.entities.get("time")
             ):
-                avail_reply = self._check_slot_before_name()
+                avail_reply = await self._check_slot_before_name()
                 if avail_reply:
                     # Slot unavailable — alternatives surfaced; ask user to pick first
                     return self._commit_reply(avail_reply)
@@ -353,10 +353,10 @@ class ConversationOrchestrator:
             intent_templates = _SLOT_TEMPLATES.get(self.memory.intent, {})
             reply = intent_templates.get(next_missing)
             if not reply:
-                reply = llm_client.generate_reply(self.memory, None, self.memory.language)
+                reply = await llm_client.generate_reply(self.memory, None, self.memory.language)
             elif self.memory.language and self.memory.language.lower() not in ("en", "english"):
                 # Use LLM to translate the static slot question to the requested language
-                reply = llm_client.generate_reply(self.memory, {"success": True, "message": f"Ask the user: {reply}"}, self.memory.language)
+                reply = await llm_client.generate_reply(self.memory, {"success": True, "message": f"Ask the user: {reply}"}, self.memory.language)
                 
             save_ai_log("DM", "INFO",
                         f"Slot-filling: next={next_missing} | template={next_missing in _SLOT_TEMPLATES}")
@@ -365,14 +365,14 @@ class ConversationOrchestrator:
         # ⑨ All entities present — execute intent
         # For book_appointment: pause for user confirmation first
         if self.memory.intent == "book_appointment" and not self._awaiting_confirmation:
-            return self._request_booking_confirmation()
+            return await self._request_booking_confirmation()
 
-        reply = self._execute_intent()
+        reply = await self._execute_intent()
         return self._commit_reply(reply)
 
     # ── Booking confirmation ──────────────────────────────────────────────────
 
-    def _request_booking_confirmation(self) -> str:
+    async def _request_booking_confirmation(self) -> str:
         """
         Build a human-readable booking summary and ask the user to confirm.
         Sets _awaiting_confirmation = True so the next turn is handled as yes/no.
@@ -399,10 +399,10 @@ class ConversationOrchestrator:
         msg = f"{self._confirmation_summary}. Shall I confirm? (Yes / No)"
         logger.info("Awaiting booking confirmation | summary=%s", self._confirmation_summary)
         save_ai_log("DM", "INFO", f"Confirmation requested: {self._confirmation_summary}")
-        reply = llm_client.generate_reply(self.memory, {"success": True, "message": msg}, self.memory.language)
+        reply = await llm_client.generate_reply(self.memory, {"success": True, "message": msg}, self.memory.language)
         return self._commit_reply(reply)
 
-    def _handle_confirmation(self, user_text: str) -> str:
+    async def _handle_confirmation(self, user_text: str) -> str:
         """
         Process the user's yes/no response to the booking confirmation prompt.
         - Yes  → execute the booking
@@ -414,7 +414,7 @@ class ConversationOrchestrator:
             self._awaiting_confirmation = False
             logger.info("Booking confirmed by user")
             save_ai_log("DM", "INFO", "Booking confirmed by user")
-            reply = self._execute_intent()
+            reply = await self._execute_intent()
             return self._commit_reply(reply)
 
         if _CONFIRM_NO.search(user_text):
@@ -445,17 +445,17 @@ class ConversationOrchestrator:
 
             logger.info("Booking cancelled by user — re-entering slot filling")
             save_ai_log("DM", "INFO", "Booking cancelled by user, re-entering slot fill")
-            reply = llm_client.generate_reply(self.memory, {"success": True, "message": msg}, self.memory.language)
+            reply = await llm_client.generate_reply(self.memory, {"success": True, "message": msg}, self.memory.language)
             return self._commit_reply(reply)
 
         # Unclear response — repeat the confirmation question
         msg = f"I didn't catch that. {self._confirmation_summary}. Please say Yes to confirm or No to change details."
-        reply = llm_client.generate_reply(self.memory, {"success": True, "message": msg}, self.memory.language)
+        reply = await llm_client.generate_reply(self.memory, {"success": True, "message": msg}, self.memory.language)
         return self._commit_reply(reply)
 
     # ── Intent execution ──────────────────────────────────────────────────────
 
-    def _execute_intent(self) -> str:
+    async def _execute_intent(self) -> str:
         """
         Dispatch to the correct AppointmentService method.
         All AppointmentService call signatures are unchanged.
@@ -472,7 +472,7 @@ class ConversationOrchestrator:
                 from database import find_available_slot
                 dept = ents.get("department")
                 if not dept and ents.get("symptoms"):
-                    dept = appointments._map_symptoms_to_department(ents.get("symptoms"))
+                    dept = await appointments._map_symptoms_to_department(ents.get("symptoms"))
                 dept = dept or config.DEFAULT_DEPARTMENT
                 
                 search_date = None if ents.get("date") == "ANY" else ents.get("date")
@@ -488,7 +488,7 @@ class ConversationOrchestrator:
         backend_result: dict[str, Any] = {}
 
         if intent == "book_appointment":
-            success, msg, context = appointments.book_appointment(
+            success, msg, context = await appointments.book_appointment(
                 name=ents.get("patient_name"),
                 doctor=ents.get("doctor"),
                 department=ents.get("department"),
@@ -657,7 +657,7 @@ class ConversationOrchestrator:
         save_ai_log("DM", "INFO",
                     f"Executed intent={intent} | success={backend_result.get('success')}")
 
-        reply = llm_client.generate_reply(
+        reply = await llm_client.generate_reply(
             memory=self.memory,
             backend_result=backend_result,
             language=self.memory.language,
@@ -668,7 +668,7 @@ class ConversationOrchestrator:
 
         return reply
 
-    def _check_slot_before_name(self) -> str | None:
+    async def _check_slot_before_name(self) -> str | None:
         """
         Called when date + time are known but patient_name has not been collected yet.
         Checks whether the requested slot actually exists (is_booked=0).
@@ -741,7 +741,7 @@ class ConversationOrchestrator:
 
             save_ai_log("DM", "INFO",
                         f"Proactive slot check: unavailable date={date} time={time} | alternatives={len(alternatives)}")
-            return llm_client.generate_reply(
+            return await llm_client.generate_reply(
                 self.memory,
                 {"success": False, "message": msg},
                 self.memory.language,
@@ -749,7 +749,7 @@ class ConversationOrchestrator:
 
         # No alternatives found at all
         save_ai_log("DM", "WARN", f"Proactive slot check: no slots found at all for dept={dept}")
-        return llm_client.generate_reply(
+        return await llm_client.generate_reply(
             self.memory,
             {"success": False, "message": f"There are currently no available slots in {dept}. Please try a different date."},
             self.memory.language,

@@ -159,7 +159,7 @@ async def twilio_process(request: Request):
         twiml = get_twiml_response(reply_text, dm.is_finished, lang_code=lang_code)
         return HTMLResponse(content=twiml, media_type="application/xml")
 
-    reply_text = dm.process(speech_result)
+    reply_text = await dm.process(speech_result)
         
     twiml = get_twiml_response(reply_text, dm.is_finished, lang_code=lang_code)
     

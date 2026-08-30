@@ -67,7 +67,7 @@ def _get_or_create_patient(name: str, phone: str = None) -> int:
     return patient_id
 
 
-def _map_symptoms_to_department(symptoms: list[str] | None) -> str | None:
+async def _map_symptoms_to_department(symptoms: list[str] | None) -> str | None:
     if not symptoms:
         return None
 
@@ -94,7 +94,7 @@ def _map_symptoms_to_department(symptoms: list[str] | None) -> str | None:
 
         # Not found in DB — infer via LLM and cache
         from services import llm_client
-        inferred_dept = llm_client.infer_department(symptoms)
+        inferred_dept = await llm_client.infer_department(symptoms)
 
         first_symptom = symptoms[0].lower()
         if _USE_POSTGRES:
@@ -142,7 +142,7 @@ def _get_doctor_id(doctor_name: str, cursor) -> Optional[int]:
 
     return best_match
 
-def book_appointment(name: str, doctor: str, department: str, symptoms: list[str], date: str, time: str) -> tuple[bool, str, dict]:
+async def book_appointment(name: str, doctor: str, department: str, symptoms: list[str], date: str, time: str) -> tuple[bool, str, dict]:
     from datetime import date as _date
     # Reject past dates immediately
     if date and date != "ANY":
@@ -159,8 +159,9 @@ def book_appointment(name: str, doctor: str, department: str, symptoms: list[str
     resolved_dept = department
 
     if not doctor_id:
-        if not resolved_dept:
-            resolved_dept = _map_symptoms_to_department(symptoms) or "General Medicine"
+        # If department is missing, try to infer from symptoms using LLM
+        if not department and symptoms:
+            resolved_dept = await _map_symptoms_to_department(symptoms) or "General Medicine"
 
         if _USE_POSTGRES:
             cursor.execute(
