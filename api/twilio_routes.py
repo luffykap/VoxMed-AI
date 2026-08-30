@@ -34,7 +34,7 @@ def get_twiml_response(reply_text: str, is_finished: bool, lang_code: str = "en"
             action="/twilio/process",
             method="POST",
             timeout=5,
-            speechTimeout="auto",
+            speechTimeout="0.8",
             language=twilio_lang
         )
         response.append(gather)
