@@ -129,17 +129,22 @@ LLM_PROVIDERS: dict[str, dict] = {
         "base_url": "https://generativelanguage.googleapis.com/v1beta",
         "model":    "gemini-3.6-flash",
     },
+    "gemini_2": {
+        "api_key":  os.getenv("GEMINI_API_KEY_2", ""),
+        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "model":    "gemini-3.6-flash",
+    },
     "groq": {
         "api_key":  os.getenv("GROQ_API_KEY", ""),
         "base_url": "https://api.groq.com/openai/v1",
-        "model":    "groq/compound-mini",
+        "model":    "llama-3.1-8b-instant",
         "json_mode": True,
     },
     "groq_120b": {
         "api_key":  os.getenv("GROQ_API_KEY", ""),
         "base_url": "https://api.groq.com/openai/v1",
-        "model":    "openai/gpt-oss-120b",  # largest model available on this Groq account
-        "json_mode": False,  # gpt-oss models return 400 for response_format json_object
+        "model":    "llama-3.3-70b-versatile",
+        "json_mode": False,
     },
     "groq_20b": {
         "api_key":  os.getenv("GROQ_API_KEY", ""),
@@ -156,8 +161,8 @@ LLM_PROVIDERS: dict[str, dict] = {
     },
 }
 
-# Failover order: Gemini (primary) → Groq Qwen-27B (json-capable) → Groq 120B → Groq 20B → OpenRouter
-LLM_PROVIDER_CHAIN: list[str] = ["gemini", "groq", "groq_120b", "groq_20b", "openrouter"]
+# Failover order: Gemini (primary) → Gemini 2 (fallback) → Groq primary → Groq secondary → OpenRouter
+LLM_PROVIDER_CHAIN: list[str] = ["gemini", "gemini_2", "groq", "groq_120b", "openrouter"]
 
 # ── Admin Dashboard Credentials ────────────────────────────────
 ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
