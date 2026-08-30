@@ -69,28 +69,90 @@ _CONFIRM_NO = re.compile(
 # Predefined slot-filling questions — deterministic, no LLM call needed.
 # Python decides which question to ask (Problem 3); LLM only formats complex replies.
 _SLOT_TEMPLATES = {
-    "book_appointment": {
-        "medical_need": "What symptoms are you experiencing? Do you have any specific doctor you want to see?",
-        "date": "What date would you prefer for the appointment?",
-        "time": "What time would you like?",
-        "patient_name": "Please provide the patient's name.",
+    "english": {
+        "book_appointment": {
+            "medical_need": "What symptoms are you experiencing? Do you have any specific doctor you want to see?",
+            "date": "What date would you prefer for the appointment?",
+            "time": "What time would you like?",
+            "patient_name": "Please provide the patient's name.",
+        },
+        "cancel_appointment": {
+            "patient_name": "Please provide the patient's name.",
+            "date": "What is the appointment date?",
+        },
+        "reschedule_appointment": {
+            "patient_name": "Please provide the patient's name.",
+            "current_date": "What is the date of your current appointment?",
+            "new_date": "What new date would you like to reschedule to?",
+            "new_time": "What time would you prefer on the new date?",
+        },
+        "check_availability": {
+            "date": "Which date would you like to check?",
+        },
     },
-
-    "cancel_appointment": {
-        "patient_name": "Please provide the patient's name.",
-        "date": "What is the appointment date?",
+    "hindi": {
+        "book_appointment": {
+            "medical_need": "आप किन लक्षणों का अनुभव कर रहे हैं? क्या आप किसी विशेष डॉक्टर को दिखाना चाहते हैं?",
+            "date": "आप किस तारीख को अपॉइंटमेंट बुक करना चाहते हैं?",
+            "time": "आप किस समय अपॉइंटमेंट चाहते हैं?",
+            "patient_name": "कृपया मरीज का नाम बताएं।",
+        },
+        "cancel_appointment": {
+            "patient_name": "कृपया मरीज का नाम बताएं।",
+            "date": "अपॉइंटमेंट की तारीख क्या है?",
+        },
+        "reschedule_appointment": {
+            "patient_name": "कृपया मरीज का नाम बताएं।",
+            "current_date": "आपके वर्तमान अपॉइंटमेंट की तारीख क्या है?",
+            "new_date": "आप किस नई तारीख को अपॉइंटमेंट चाहते हैं?",
+            "new_time": "आप नई तारीख पर किस समय अपॉइंटमेंट चाहते हैं?",
+        },
+        "check_availability": {
+            "date": "आप किस तारीख की जांच करना चाहते हैं?",
+        },
     },
-
-    "reschedule_appointment": {
-        "patient_name": "Please provide the patient's name.",
-        "current_date": "What is the date of your current appointment?",
-        "new_date": "What new date would you like to reschedule to?",
-        "new_time": "What time would you prefer on the new date?",
+    "kannada": {
+        "book_appointment": {
+            "medical_need": "ನೀವು ಯಾವ ರೋಗಲಕ್ಷಣಗಳನ್ನು ಅನುಭವಿಸುತ್ತಿದ್ದೀರಿ? ನೀವು ಯಾವುದೇ ನಿರ್ದಿಷ್ಟ ವೈದ್ಯರನ್ನು ಭೇಟಿಯಾಗಲು ಬಯಸುವಿರಾ?",
+            "date": "ನೀವು ಯಾವ ದಿನಾಂಕದಂದು ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಬುಕ್ ಮಾಡಲು ಬಯಸುತ್ತೀರಿ?",
+            "time": "ನೀವು ಯಾವ ಸಮಯವನ್ನು ಬಯಸುತ್ತೀರಿ?",
+            "patient_name": "ದಯವಿಟ್ಟು ರೋಗಿಯ ಹೆಸರನ್ನು ಒದಗಿಸಿ.",
+        },
+        "cancel_appointment": {
+            "patient_name": "ದಯವಿಟ್ಟು ರೋಗಿಯ ಹೆಸರನ್ನು ಒದಗಿಸಿ.",
+            "date": "ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ದಿನಾಂಕ ಯಾವುದು?",
+        },
+        "reschedule_appointment": {
+            "patient_name": "ದಯವಿಟ್ಟು ರೋಗಿಯ ಹೆಸರನ್ನು ಒದಗಿಸಿ.",
+            "current_date": "ನಿಮ್ಮ ಪ್ರಸ್ತುತ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ದಿನಾಂಕ ಯಾವುದು?",
+            "new_date": "ನೀವು ಯಾವ ಹೊಸ ದಿನಾಂಕಕ್ಕೆ ಬದಲಾಯಿಸಲು ಬಯಸುತ್ತೀರಿ?",
+            "new_time": "ಹೊಸ ದಿನಾಂಕದಂದು ನೀವು ಯಾವ ಸಮಯವನ್ನು ಬಯಸುತ್ತೀರಿ?",
+        },
+        "check_availability": {
+            "date": "ನೀವು ಯಾವ ದಿನಾಂಕವನ್ನು ಪರಿಶೀಲಿಸಲು ಬಯಸುತ್ತೀರಿ?",
+        },
     },
-
-    "check_availability": {
-        "date": "Which date would you like to check?",
-    },
+    "telugu": {
+        "book_appointment": {
+            "medical_need": "మీరు ఏ లక్షణాలను ఎదుర్కొంటున్నారు? మీరు నిర్దిష్ట వైద్యుడిని కలవాలనుకుంటున్నారా?",
+            "date": "మీరు ఏ తేదీన అపాయింట్‌మెంట్ బుక్ చేయాలనుకుంటున్నారు?",
+            "time": "మీకు ఏ సమయం కావాలి?",
+            "patient_name": "దయచేసి రోగి పేరును తెలపండి.",
+        },
+        "cancel_appointment": {
+            "patient_name": "దయచేసి రోగి పేరును తెలపండి.",
+            "date": "అపాయింట్‌మెంట్ తేదీ ఏమిటి?",
+        },
+        "reschedule_appointment": {
+            "patient_name": "దయచేసి రోగి పేరును తెలపండి.",
+            "current_date": "మీ ప్రస్తుత అపాయింట్‌మెంట్ తేదీ ఏమిటి?",
+            "new_date": "మీరు ఏ కొత్త తేదీకి మార్చాలనుకుంటున్నారు?",
+            "new_time": "కొత్త తేదీలో మీరు ఏ సమయం కోరుకుంటున్నారు?",
+        },
+        "check_availability": {
+            "date": "మీరు ఏ తేదీని తనిఖీ చేయాలనుకుంటున్నారు?",
+        },
+    }
 }
 
 
@@ -319,11 +381,11 @@ class ConversationOrchestrator:
             # Steer back to the booking flow
             if missing:
                 next_missing = missing[0]
-                intent_templates = _SLOT_TEMPLATES.get(self.memory.intent, {})
+                lang_key = self.memory.language.lower() if self.memory.language else "english"
+                if lang_key not in _SLOT_TEMPLATES: lang_key = "english"
+                intent_templates = _SLOT_TEMPLATES[lang_key].get(self.memory.intent, {})
                 slot_question = intent_templates.get(next_missing)
                 if slot_question:
-                    if self.memory.language and self.memory.language.lower() not in ("en", "english"):
-                        slot_question = await llm_client.generate_reply(self.memory, {"success": True, "message": f"Ask the user: {slot_question}"}, self.memory.language)
                     reply = f"{reply} {slot_question}"
                     
             save_ai_log("DM", "INFO", f"Side query handled. reply_len={len(reply)}")
@@ -350,16 +412,17 @@ class ConversationOrchestrator:
                 # Slot is available — fall through to ask for name normally
 
             # ⑧ Use predefined template — zero LLM calls for slot questions (Problem 6)
-            intent_templates = _SLOT_TEMPLATES.get(self.memory.intent, {})
+            lang_key = self.memory.language.lower() if self.memory.language else "english"
+            if lang_key not in _SLOT_TEMPLATES: lang_key = "english"
+            
+            intent_templates = _SLOT_TEMPLATES[lang_key].get(self.memory.intent, {})
             reply = intent_templates.get(next_missing)
+            
             if not reply:
                 reply = await llm_client.generate_reply(self.memory, None, self.memory.language)
-            elif self.memory.language and self.memory.language.lower() not in ("en", "english"):
-                # Use LLM to translate the static slot question to the requested language
-                reply = await llm_client.generate_reply(self.memory, {"success": True, "message": f"Ask the user: {reply}"}, self.memory.language)
                 
             save_ai_log("DM", "INFO",
-                        f"Slot-filling: next={next_missing} | template={next_missing in _SLOT_TEMPLATES}")
+                        f"Slot-filling: next={next_missing} | template={next_missing in intent_templates}")
             return self._commit_reply(reply)
 
         # ⑨ All entities present — execute intent
