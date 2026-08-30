@@ -3,9 +3,35 @@ from processing.stt import transcribe
 from processing.orchestrator import ConversationOrchestrator
 from processing.tts import speak
 from utils.logger import get_logger
-from processing.translator import translate_from_english
 
 logger = get_logger(__name__)
+
+_PHRASES = {
+    "en": {
+        "trouble_hearing": "I'm having trouble hearing you. Please try calling back later.",
+        "could_not_transcribe": "Could not transcribe audio. Please try again.",
+        "trouble_understanding": "I'm having trouble understanding you. Please try calling back later.",
+        "didn_t_catch_that": "I didn't quite catch that. Please speak clearly and try again."
+    },
+    "hi": {
+        "trouble_hearing": "मुझे आपको सुनने में परेशानी हो रही है। कृपया बाद में कॉल करें।",
+        "could_not_transcribe": "ऑडियो ट्रांसक्राइब नहीं किया जा सका। कृपया पुनः प्रयास करें।",
+        "trouble_understanding": "मुझे आपकी बात समझने में परेशानी हो रही है। कृपया बाद में कॉल करें।",
+        "didn_t_catch_that": "मुझे सुनाई नहीं दिया। कृपया स्पष्ट रूप से बोलें और पुनः प्रयास करें।"
+    },
+    "kn": {
+        "trouble_hearing": "ನನಗೆ ಕೇಳಿಸುತ್ತಿಲ್ಲ. ದಯವಿಟ್ಟು ನಂತರ ಮತ್ತೆ ಕರೆ ಮಾಡಿ.",
+        "could_not_transcribe": "ಆಡಿಯೋವನ್ನು ಲಿಪ್ಯಂತರ ಮಾಡಲು ಸಾಧ್ಯವಿಲ್ಲ. ದಯವಿಟ್ಟು ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.",
+        "trouble_understanding": "ನನಗೆ ಅರ್ಥವಾಗುತ್ತಿಲ್ಲ. ದಯವಿಟ್ಟು ನಂತರ ಮತ್ತೆ ಕರೆ ಮಾಡಿ.",
+        "didn_t_catch_that": "ನನಗೆ ಕೇಳಿಸಲಿಲ್ಲ. ದಯವಿಟ್ಟು ಸ್ಪಷ್ಟವಾಗಿ ಮಾತನಾಡಿ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ."
+    },
+    "te": {
+        "trouble_hearing": "నాకు మీ మాటలు వినపడటం లేదు. దయచేసి తర్వాత మళ్లీ కాల్ చేయండి.",
+        "could_not_transcribe": "ఆడియోను లిప్యంతరీకరించడం సాధ్యం కాలేదు. దయచేసి మళ్లీ ప్రయత్నించండి.",
+        "trouble_understanding": "మీ మాటలు నాకు అర్థం కాలేదు. దయచేసి తర్వాత మళ్లీ కాల్ చేయండి.",
+        "didn_t_catch_that": "నాకు సరిగ్గా వినపడలేదు. దయచేసి స్పష్టంగా మళ్లీ చెప్పండి."
+    }
+}
 
 
 def _print_divider():
@@ -26,11 +52,11 @@ def main():
         lang_name = config.SUPPORTED_LANGUAGES[lang_choice]["name"]
         print(f"\nSelected: {lang_name}")
     else:
-        lang_code = None
+        lang_code = "en"
         lang_name = "English"
-        print("\nSelected: Auto-Detect")
+        print("\nSelected: Auto-Detect (Defaulting to English)")
 
-    auto_detect = (lang_code is None)
+    auto_detect = (lang_choice == "0" or lang_choice == "")
 
     dm = ConversationOrchestrator(language=lang_name)
 
@@ -48,19 +74,18 @@ def main():
         # ── Stage 1: Record + Transcribe ─────────────────────────────────────
         logger.info("Pipeline started")
         stt_result = transcribe(language=lang_code)
+        
+        # Ensure lang_code defaults to 'en' for dict lookup if auto_detect fails
+        safe_lang_code = lang_code if lang_code in _PHRASES else "en"
 
         if not stt_result["text"]:
             retry_count += 1
             if retry_count >= 3:
-                msg = "I'm having trouble hearing you. Please try calling back later."
-                if lang_code and lang_code != "en":
-                    msg = translate_from_english(msg, lang_code)
+                msg = _PHRASES[safe_lang_code]["trouble_hearing"]
                 print(f"\n[AI]: {msg}\n")
                 speak(msg, language=lang_code or "en")
                 break
-            msg = "Could not transcribe audio. Please try again."
-            if lang_code and lang_code != "en":
-                msg = translate_from_english(msg, lang_code)
+            msg = _PHRASES[safe_lang_code]["could_not_transcribe"]
             print(f"\n[AI]: {msg}")
             speak(msg, language=lang_code or "en")
             continue
@@ -68,15 +93,11 @@ def main():
         if stt_result["confidence"] < 0.15:  # tiny model produces lower scores than large-v3
             retry_count += 1
             if retry_count >= 3:
-                msg = "I'm having trouble understanding you. Please try calling back later."
-                if lang_code and lang_code != "en":
-                    msg = translate_from_english(msg, lang_code)
+                msg = _PHRASES[safe_lang_code]["trouble_understanding"]
                 print(f"\n[AI]: {msg}\n")
                 speak(msg, language=lang_code or "en")
                 break
-            msg = "I didn't quite catch that. Please speak clearly and try again."
-            if lang_code and lang_code != "en":
-                msg = translate_from_english(msg, lang_code)
+            msg = _PHRASES[safe_lang_code]["didn_t_catch_that"]
             print(f"\n[AI]: {msg}")
             speak(msg, language=lang_code or "en")
             continue

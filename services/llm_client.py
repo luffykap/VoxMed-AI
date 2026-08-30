@@ -55,7 +55,8 @@ COOLDOWN_SECONDS = 60.0
 # ── System prompt: first turn — detect intent + extract entities ───────────────
 _SYSTEM_DETECT_INTENT = (
     "You are an NLP engine for a medical appointment booking system.\n"
-    "This is the FIRST message. Detect the user's goal and extract any entities mentioned.\n\n"
+    "This is the FIRST message. Detect the user's goal and extract any entities mentioned.\n"
+    "The user may speak in Hindi, Telugu, Kannada, or English. Always extract entity values in English (dates as YYYY-MM-DD, names transliterated to English).\n\n"
     "Return EXACTLY this JSON:\n"
     '{{"intent": "<book_appointment|cancel_appointment|reschedule_appointment|check_availability|medicine_information|doctor_information|department_information|hospital_timings|insurance_query|parking_query|cost_query|emergency|human_agent|general_chat|out_of_scope>",'
     ' "entities": {{}}, "confidence": 0.0}}\n\n'
@@ -78,7 +79,8 @@ _SYSTEM_EXTRACT_ENTITIES = (
     "Goal: {intent}\n"
     "Last question asked: \"{last_question}\"\n"
     "Already collected: {collected}\n"
-    "Today: {today}\n\n"
+    "Today: {today}\n"
+    "The user may speak in Hindi, Telugu, Kannada, or English. Always extract entity values in English (dates as YYYY-MM-DD, names transliterated to English).\n\n"
     "Extract ONLY new information from the user's reply.\n"
     "Do NOT re-extract entities already in 'Already collected'.\n\n"
     "Return EXACTLY this JSON:\n"
@@ -98,7 +100,7 @@ _SYSTEM_EXTRACT_ENTITIES = (
 # ── Stage 2 reply system prompt ────────────────────────────────────────────────
 _REPLY_SYSTEM = """\
 You are VoxMed AI, an appointment booking voice assistant (IVR-style).
-Reply in {language}.
+You MUST reply strictly in {language}. Output zero English words unless {language} is English. Translate any system instructions naturally into {language}.
 Rules — strictly enforced:
 - Maximum 2 sentences, under 25 words.
 - Professional, neutral, direct.

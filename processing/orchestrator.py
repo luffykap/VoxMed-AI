@@ -27,11 +27,12 @@ logger = get_logger(__name__)
 # ── Module-level conversation-control constants ─────────────────────────────────
 
 # Phrases that signal the user wants to STOP the current flow and reset.
-# Checked with regex — no extra LLM call needed.
+# Checked with regex — no extra LLM call needed. Multilingual support added.
 _ABORT_PHRASES = re.compile(
     r"\b(cancel (it|that|this|everything|all)|i want to cancel|never mind|nevermind|"
     r"forget it|don'?t want|do not want|i changed my mind|start over|"
-    r"i don'?t want to|not anymore|stop this|abort|scratch that|let'?s stop)\b",
+    r"i don'?t want to|not anymore|stop this|abort|scratch that|let'?s stop|"
+    r"ruko|band karo|raddu chey|cancel chey|bekeda|cancel maadu)\b",
     re.IGNORECASE,
 )
 
@@ -39,7 +40,8 @@ _ABORT_PHRASES = re.compile(
 _FAREWELL_PHRASES = re.compile(
     r"\b(goodbye|good bye|bye|end (it|the call|this)|i('?ll just)? end it|"
     r"i don'?t (want|need) (any )?help|no (more )?help|i('?m)? (done|leaving|going)|"
-    r"hang up|stop the call|disconnect|i'?ll call later|call you later)\b",
+    r"hang up|stop the call|disconnect|i'?ll call later|call you later|"
+    r"alvida|namaste|dhanyavad|dhanyavadagalu|dhanyavaadalu|bye bye)\b",
     re.IGNORECASE,
 )
 
@@ -54,11 +56,13 @@ _SWITCHABLE_INTENTS = {
 
 # Confirmation yes/no patterns (no LLM needed for simple affirm/deny)
 _CONFIRM_YES = re.compile(
-    r"\b(yes|yeah|yep|yup|correct|confirm|confirmed|ok|okay|sure|go ahead|book it|do it|that'?s right|right|perfect|sounds good)\b",
+    r"\b(yes|yeah|yep|yup|correct|confirm|confirmed|ok|okay|sure|go ahead|book it|do it|that'?s right|right|perfect|sounds good|"
+    r"haan|han|ji haan|sari|avunu|houdu|sari)\b",
     re.IGNORECASE,
 )
 _CONFIRM_NO = re.compile(
-    r"\b(no|nope|nah|wrong|incorrect|change|wait|actually|different|not that|not right|cancel that|let me|i want to change)\b",
+    r"\b(no|nope|nah|wrong|incorrect|change|wait|actually|different|not that|not right|cancel that|let me|i want to change|"
+    r"nahi|na|illa|bede|bedi|kadu|vaddu)\b",
     re.IGNORECASE,
 )
 
@@ -117,10 +121,15 @@ class ConversationOrchestrator:
         return self._finished
 
     def get_greeting(self, lang_code: str = None) -> str:
-        greeting = "Welcome to VoxMed AI. How can I help you today?"
-        if lang_code and lang_code != "en":
-            from processing.translator import translate_from_english
-            greeting = translate_from_english(greeting, lang_code)
+        lang = lang_code or "en"
+        if lang.startswith("hi"):
+            greeting = "वॉक्समेड एआई में आपका स्वागत है। मैं आज आपकी कैसे मदद कर सकता हूँ?"
+        elif lang.startswith("kn"):
+            greeting = "VoxMed AI ಗೆ ಸ್ವಾಗತ. ನಾನು ಇಂದು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಬಹುದು?"
+        elif lang.startswith("te"):
+            greeting = "VoxMed AI కి స్వాగతం. నేను ఈరోజు మీకు ఎలా సహాయం చేయగలను?"
+        else:
+            greeting = "Welcome to VoxMed AI. How can I help you today?"
             
         save_conversation(self.call_id, "AI", greeting)
         self.memory.add_turn("assistant", greeting)
@@ -194,7 +203,7 @@ class ConversationOrchestrator:
                     save_ai_log("DM", "INFO",
                                 f"Conversation reset: user aborted '{old_intent}'")
                     logger.info("Intent aborted by user | old=%s", old_intent)
-                    reply = "No problem! Let's start fresh. How can I help you today?"
+                    reply = llm_client.generate_reply(self.memory, {"success": True, "message": "No problem! Let's start fresh. How can I help you today?"}, self.memory.language)
                     return self._commit_reply(reply)
 
                 elif new_intent and new_intent in _SWITCHABLE_INTENTS:
@@ -221,7 +230,7 @@ class ConversationOrchestrator:
                 save_ai_log("DM", "INFO",
                             f"Abort phrase (no intent_switch) — reset from {old_intent}")
                 logger.info("Intent aborted by user (fallback regex) | old=%s", old_intent)
-                reply = "No problem! Let's start over. How can I help you today?"
+                reply = llm_client.generate_reply(self.memory, {"success": True, "message": "No problem! Let's start over. How can I help you today?"}, self.memory.language)
                 return self._commit_reply(reply)
 
             save_ai_log(
@@ -237,7 +246,7 @@ class ConversationOrchestrator:
             logger.info("Call ending — farewell phrase detected")
             self._finished = True
             end_call(self.call_id)
-            reply = "Thank you for calling VoxMed AI. Take care and stay healthy. Goodbye!"
+            reply = llm_client.generate_reply(self.memory, {"success": True, "message": "Thank you for calling VoxMed AI. Take care and stay healthy. Goodbye!"}, self.memory.language)
             return self._commit_reply(reply)
 
 
@@ -387,9 +396,10 @@ class ConversationOrchestrator:
         self._confirmation_summary = " ".join(summary_parts)
         self._awaiting_confirmation = True
 
-        reply = f"{self._confirmation_summary}. Shall I confirm? (Yes / No)"
+        msg = f"{self._confirmation_summary}. Shall I confirm? (Yes / No)"
         logger.info("Awaiting booking confirmation | summary=%s", self._confirmation_summary)
         save_ai_log("DM", "INFO", f"Confirmation requested: {self._confirmation_summary}")
+        reply = llm_client.generate_reply(self.memory, {"success": True, "message": msg}, self.memory.language)
         return self._commit_reply(reply)
 
     def _handle_confirmation(self, user_text: str) -> str:
@@ -414,31 +424,33 @@ class ConversationOrchestrator:
 
             # Heuristic: check which entity the user mentioned
             text_lower = user_text.lower()
-            if any(w in text_lower for w in ("date", "day", "when")):
+            if any(w in text_lower for w in ("date", "day", "when", "din", "tarikh", "roju", "dina")):
                 self.memory.entities["date"] = None
                 self.memory.entities["time"] = None
-                reply = "No problem. What date would you prefer?"
-            elif any(w in text_lower for w in ("time", "hour", "o'clock", "am", "pm")):
+                msg = "No problem. What date would you prefer?"
+            elif any(w in text_lower for w in ("time", "hour", "o'clock", "am", "pm", "samay", "baje", "samaya", "vela")):
                 self.memory.entities["time"] = None
-                reply = "Sure. What time would you prefer?"
-            elif any(w in text_lower for w in ("doctor", "dr", "physician")):
+                msg = "Sure. What time would you prefer?"
+            elif any(w in text_lower for w in ("doctor", "dr", "physician", "doctoru", "daaktar")):
                 self.memory.entities["doctor"] = None
-                reply = "Understood. Which doctor would you like to see?"
-            elif any(w in text_lower for w in ("name", "patient")):
+                msg = "Understood. Which doctor would you like to see?"
+            elif any(w in text_lower for w in ("name", "patient", "naam", "peshent", "rogi", "hesaru", "peru")):
                 self.memory.entities["patient_name"] = None
-                reply = "Of course. What is the patient's name?"
+                msg = "Of course. What is the patient's name?"
             else:
                 # Can't tell what to change — clear date/time and restart slot filling
                 self.memory.entities["date"] = None
                 self.memory.entities["time"] = None
-                reply = "No problem. What changes would you like to make? Let's start with the date."
+                msg = "No problem. What changes would you like to make? Let's start with the date."
 
             logger.info("Booking cancelled by user — re-entering slot filling")
             save_ai_log("DM", "INFO", "Booking cancelled by user, re-entering slot fill")
+            reply = llm_client.generate_reply(self.memory, {"success": True, "message": msg}, self.memory.language)
             return self._commit_reply(reply)
 
         # Unclear response — repeat the confirmation question
-        reply = f"I didn't catch that. {self._confirmation_summary}. Please say Yes to confirm or No to change details."
+        msg = f"I didn't catch that. {self._confirmation_summary}. Please say Yes to confirm or No to change details."
+        reply = llm_client.generate_reply(self.memory, {"success": True, "message": msg}, self.memory.language)
         return self._commit_reply(reply)
 
     # ── Intent execution ──────────────────────────────────────────────────────

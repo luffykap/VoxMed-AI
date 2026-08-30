@@ -46,6 +46,30 @@ def get_twiml_response(reply_text: str, is_finished: bool, lang_code: str = "en"
 
     return str(response)
 
+_PHRASES = {
+    "en": {
+        "session_expired": "Sorry, the session has expired. Please call back.",
+        "no_audio": "I didn't quite catch that. Could you repeat?",
+        "silence": "Please let me know how I can help.",
+        "greeting_suffix": "Press 1 for English. Hindi ke liye 2 dabaye. Kannada gaagi 3 otti. Telugu kosam 4 nokkandi."
+    },
+    "hi": {
+        "session_expired": "क्षमा करें, सत्र समाप्त हो गया है। कृपया वापस कॉल करें।",
+        "no_audio": "मुझे सुनाई नहीं दिया। कृपया दोहराएं।",
+        "silence": "कृपया मुझे बताएं कि मैं आपकी कैसे मदद कर सकता हूं।",
+    },
+    "kn": {
+        "session_expired": "ಕ್ಷಮಿಸಿ, ಸೆಷನ್ ಮುಗಿದಿದೆ. ದಯವಿಟ್ಟು ಮತ್ತೆ ಕರೆ ಮಾಡಿ.",
+        "no_audio": "ನನಗೆ ಕೇಳಿಸಲಿಲ್ಲ. ದಯವಿಟ್ಟು ಮತ್ತೊಮ್ಮೆ ಹೇಳಿ.",
+        "silence": "ದಯವಿಟ್ಟು ನಾನು ಹೇಗೆ ಸಹಾಯ ಮಾಡಬಹುದು ಎಂದು ತಿಳಿಸಿ.",
+    },
+    "te": {
+        "session_expired": "క్షమించండి, సెషన్ ముగిసింది. దయచేసి తిరిగి కాల్ చేయండి.",
+        "no_audio": "నాకు వినపడలేదు. దయచేసి మళ్ళీ చెప్పండి.",
+        "silence": "దయచేసి నేను మీకు ఎలా సహాయం చేయగలనో చెప్పండి.",
+    }
+}
+
 @router.post("/twilio/incoming")
 async def twilio_incoming(request: Request):
     """Webhook triggered when a new call connects."""
@@ -61,7 +85,7 @@ async def twilio_incoming(request: Request):
         method="POST",
         timeout=5
     )
-    gather.say("Welcome to VoxMed AI. Press 1 for English. Hindi ke liye 2 dabaye. Kannada gaagi 3 otti. Telugu kosam 4 nokkandi.", language="en-IN")
+    gather.say(f"Welcome to VoxMed AI. {_PHRASES['en']['greeting_suffix']}", language="en-IN")
     response.append(gather)
     
     # Fallback if the user doesn't press anything
@@ -112,15 +136,9 @@ async def twilio_process(request: Request):
     logger.info("Received speech from Twilio | CallSid=%s | Text=%s", call_sid, speech_result)
 
     dm = active_calls.get(call_sid)
-    if not dm:
-        logger.warning("CallSid not found in active calls. | CallSid=%s", call_sid)
-        response = VoiceResponse()
-        response.say("Sorry, the session has expired. Please call back.")
-        response.hangup()
-        return HTMLResponse(content=str(response), media_type="application/xml")
-
+    
     lang_code = "en"
-    if dm.memory.language:
+    if dm and dm.memory.language:
         lang_name = dm.memory.language.lower()
         if "hindi" in lang_name:
             lang_code = "hi"
@@ -129,22 +147,19 @@ async def twilio_process(request: Request):
         elif "telugu" in lang_name:
             lang_code = "te"
 
+    if not dm:
+        logger.warning("CallSid not found in active calls. | CallSid=%s", call_sid)
+        response = VoiceResponse()
+        response.say(_PHRASES["en"]["session_expired"])
+        response.hangup()
+        return HTMLResponse(content=str(response), media_type="application/xml")
+
     if not speech_result:
-        reply_text = "I didn't quite catch that. Could you repeat?"
-        if lang_code != "en":
-            from processing.translator import translate_from_english
-            reply_text = translate_from_english(reply_text, lang_code)
+        reply_text = _PHRASES[lang_code]["no_audio"]
         twiml = get_twiml_response(reply_text, dm.is_finished, lang_code=lang_code)
         return HTMLResponse(content=twiml, media_type="application/xml")
 
-    if lang_code != "en":
-        from processing.translator import translate_to_english, translate_from_english
-        english_speech = translate_to_english(speech_result, lang_code)
-        logger.info("Translated speech to English | Original=%s | English=%s", speech_result, english_speech)
-        reply_text_eng = dm.process(english_speech)
-        reply_text = translate_from_english(reply_text_eng, lang_code)
-    else:
-        reply_text = dm.process(speech_result)
+    reply_text = dm.process(speech_result)
         
     twiml = get_twiml_response(reply_text, dm.is_finished, lang_code=lang_code)
     
@@ -175,10 +190,6 @@ async def twilio_process_silence(request: Request):
         elif "telugu" in lang_name:
             lang_code = "te"
 
-    reply_text = "Please let me know how I can help."
-    if lang_code != "en":
-        from processing.translator import translate_from_english
-        reply_text = translate_from_english(reply_text, lang_code)
-
+    reply_text = _PHRASES[lang_code]["silence"]
     twiml = get_twiml_response(reply_text, dm.is_finished, lang_code=lang_code)
     return HTMLResponse(content=twiml, media_type="application/xml")
