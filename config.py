@@ -152,6 +152,25 @@ LLM_PROVIDERS: dict[str, dict] = {
         "model":    "qwen/qwen3.8-27b",  # verified active on this account (2026-08)
         "json_mode": True,
     },
+    # ── Groq key 2 (second free-tier account — rate-limit fallback) ──────────────
+    "groq_k2": {
+        "api_key":  os.getenv("GROQ_API_KEY_2", ""),
+        "base_url": "https://api.groq.com/openai/v1",
+        "model":    "openai/gpt-oss-20b",
+        "json_mode": False,
+    },
+    "groq_120b_k2": {
+        "api_key":  os.getenv("GROQ_API_KEY_2", ""),
+        "base_url": "https://api.groq.com/openai/v1",
+        "model":    "openai/gpt-oss-120b",
+        "json_mode": False,
+    },
+    "groq_qwen_k2": {
+        "api_key":  os.getenv("GROQ_API_KEY_2", ""),
+        "base_url": "https://api.groq.com/openai/v1",
+        "model":    "qwen/qwen3.8-27b",
+        "json_mode": True,
+    },
     # cerebras: disabled — account requires payment (402)
     # mistral:  disabled — invalid API key (401)
     "openrouter": {
@@ -161,8 +180,14 @@ LLM_PROVIDERS: dict[str, dict] = {
     },
 }
 
-# Failover order: Groq 20B (fast primary) → Groq Qwen → Groq 120B → Gemini → Gemini 2 → OpenRouter
-LLM_PROVIDER_CHAIN: list[str] = ["groq", "groq_qwen", "groq_120b", "gemini", "gemini_2", "openrouter"]
+# Failover order: Groq key-1 → Groq key-2 → Gemini → Gemini 2 → OpenRouter
+# Key-2 providers only activate if key-1 is rate-limited (429 → 60s cooldown).
+LLM_PROVIDER_CHAIN: list[str] = [
+    "groq", "groq_qwen", "groq_120b",          # Groq API key 1
+    "groq_k2", "groq_qwen_k2", "groq_120b_k2", # Groq API key 2 (rate-limit fallback)
+    "gemini", "gemini_2",                        # Gemini fallback
+    "openrouter",                                # Last resort
+]
 
 # ── Admin Dashboard Credentials ────────────────────────────────
 ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
