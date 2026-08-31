@@ -171,6 +171,44 @@ LLM_PROVIDERS: dict[str, dict] = {
         "model":    "qwen/qwen3.8-27b",
         "json_mode": True,
     },
+    # ── Groq key 3 (third free-tier account — rate-limit fallback) ───────────────
+    "groq_k3": {
+        "api_key":  os.getenv("GROQ_API_KEY_3", ""),
+        "base_url": "https://api.groq.com/openai/v1",
+        "model":    "openai/gpt-oss-20b",
+        "json_mode": False,
+    },
+    "groq_120b_k3": {
+        "api_key":  os.getenv("GROQ_API_KEY_3", ""),
+        "base_url": "https://api.groq.com/openai/v1",
+        "model":    "openai/gpt-oss-120b",
+        "json_mode": False,
+    },
+    "groq_qwen_k3": {
+        "api_key":  os.getenv("GROQ_API_KEY_3", ""),
+        "base_url": "https://api.groq.com/openai/v1",
+        "model":    "qwen/qwen3.8-27b",
+        "json_mode": True,
+    },
+    # ── Groq key 4 (fourth free-tier account — rate-limit fallback) ──────────────
+    "groq_k4": {
+        "api_key":  os.getenv("GROQ_API_KEY_4", ""),
+        "base_url": "https://api.groq.com/openai/v1",
+        "model":    "openai/gpt-oss-20b",
+        "json_mode": False,
+    },
+    "groq_120b_k4": {
+        "api_key":  os.getenv("GROQ_API_KEY_4", ""),
+        "base_url": "https://api.groq.com/openai/v1",
+        "model":    "openai/gpt-oss-120b",
+        "json_mode": False,
+    },
+    "groq_qwen_k4": {
+        "api_key":  os.getenv("GROQ_API_KEY_4", ""),
+        "base_url": "https://api.groq.com/openai/v1",
+        "model":    "qwen/qwen3.8-27b",
+        "json_mode": True,
+    },
     # cerebras: disabled — account requires payment (402)
     # mistral:  disabled — invalid API key (401)
     "openrouter": {
@@ -180,11 +218,14 @@ LLM_PROVIDERS: dict[str, dict] = {
     },
 }
 
-# Failover order: Groq key-1 → Groq key-2 → Gemini → Gemini 2 → OpenRouter
-# Key-2 providers only activate if key-1 is rate-limited (429 → 60s cooldown).
+# Failover order: Groq key 1→2→3→4 → Gemini → Gemini 2 → OpenRouter
+# Each key set only activates when the previous key is rate-limited (429 → 60s cooldown).
+# Keys with no api_key configured are automatically skipped.
 LLM_PROVIDER_CHAIN: list[str] = [
-    "groq", "groq_qwen", "groq_120b",          # Groq API key 1
-    "groq_k2", "groq_qwen_k2", "groq_120b_k2", # Groq API key 2 (rate-limit fallback)
+    "groq",    "groq_qwen",    "groq_120b",    # Groq API key 1
+    "groq_k2", "groq_qwen_k2", "groq_120b_k2", # Groq API key 2
+    "groq_k3", "groq_qwen_k3", "groq_120b_k3", # Groq API key 3
+    "groq_k4", "groq_qwen_k4", "groq_120b_k4", # Groq API key 4
     "gemini", "gemini_2",                        # Gemini fallback
     "openrouter",                                # Last resort
 ]
