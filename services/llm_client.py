@@ -281,6 +281,10 @@ async def _call_with_failover(
     Skips providers with no API key configured.
     Returns the assistant message content string.
     Raises the last exception if ALL providers fail.
+
+    Empty-string responses are treated as soft failures in prose mode
+    (json_mode=False) so gpt-oss models that return empty for prose
+    automatically cascade to the next provider (Qwen, Gemini, etc).
     """
     last_exc: Exception | None = None
 
@@ -298,8 +302,14 @@ async def _call_with_failover(
 
         try:
             result = await _call_provider(name, provider_cfg, messages, json_mode, max_tokens)
+            # In prose mode, an empty response is useless — try the next provider
+            if not json_mode and not result.strip():
+                logger.warning(
+                    "Provider %s returned empty prose response -- trying next", name
+                )
+                last_exc = RuntimeError(f"{name} returned empty prose")
+                continue
             logger.info("LLM provider %s succeeded", name)
-            # Clear cooldown on success, just in case
             _provider_cooldowns.pop(name, None)
             return result
 
