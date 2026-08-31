@@ -119,7 +119,7 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "voxmed123")
 LLM_TEMPERATURE               = 0.1
 LLM_MAX_TOKENS_UNDERSTANDING  = 250
 LLM_MAX_TOKENS_RESPONSE       = 80
-LLM_TIMEOUT                   = 8  # Seconds before giving up on a provider and trying the next
+LLM_TIMEOUT                   = 6  # Seconds before giving up on a provider and trying the next
 
 # ── LLM — per-provider credentials ────────────────────────────
 # Each entry: (env_var_name, base_url, model)
@@ -161,8 +161,8 @@ LLM_PROVIDERS: dict[str, dict] = {
     },
 }
 
-# Failover order: Gemini (primary) → Gemini 2 → Groq 20B → Groq 120B → Groq Qwen → OpenRouter
-LLM_PROVIDER_CHAIN: list[str] = ["gemini", "gemini_2", "groq", "groq_120b", "groq_qwen", "openrouter"]
+# Failover order: Groq 20B (fast primary) → Groq Qwen → Groq 120B → Gemini → Gemini 2 → OpenRouter
+LLM_PROVIDER_CHAIN: list[str] = ["groq", "groq_qwen", "groq_120b", "gemini", "gemini_2", "openrouter"]
 
 # ── Admin Dashboard Credentials ────────────────────────────────
 ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
