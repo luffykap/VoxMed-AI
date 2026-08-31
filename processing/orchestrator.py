@@ -223,7 +223,7 @@ class ConversationOrchestrator:
 
         # ① Handle pending booking confirmation before any LLM call
         if self._awaiting_confirmation:
-            return self._handle_confirmation(user_text)
+            return await self._handle_confirmation(user_text)
 
         # ② Determine mode (Problem 1 — intent lock)
         detect_intent = self.memory.intent is None
