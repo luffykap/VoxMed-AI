@@ -36,18 +36,51 @@ logger = get_logger(__name__)
 
 
 def _extract_json(raw: str) -> dict:
-    """Extract a JSON object from a raw string, tolerating markdown code fences."""
-    # Strip markdown code fences: ```json ... ``` or ``` ... ```
+    """Extract a JSON object from a raw string.
+
+    Handles three failure modes from models without json_mode:
+      1. Markdown code fences wrapping the JSON.
+      2. Prose before/after a valid JSON block.
+      3. Truncated JSON (response cut off mid-string or mid-object).
+    """
+    if not raw or not raw.strip():
+        raise json.JSONDecodeError("Empty response", raw or "", 0)
+
+    # Stage 1: strip markdown fences
     stripped = re.sub(r"```(?:json)?\s*", "", raw).replace("```", "").strip()
-    # Try direct parse first
+
+    # Stage 2: direct parse
     try:
         return json.loads(stripped)
     except json.JSONDecodeError:
         pass
-    # Find first {...} block in the string (handles models that add prose)
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
+
+    # Stage 3: find first complete {...} block (handles prose wrappers)
+    match = re.search(r"\{.*\}", stripped, re.DOTALL)
     if match:
-        return json.loads(match.group())
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+
+    # Stage 4: recover truncated JSON
+    # e.g. raw = '{"entities": {"time": "' — close the dangling string then braces
+    partial = stripped
+    obj_start = partial.find("{")
+    if obj_start != -1:
+        partial = partial[obj_start:]
+        # Close any dangling open string (odd number of unescaped quotes)
+        if len(re.findall(r'(?<!\\)"', partial)) % 2 == 1:
+            partial += '"'
+        # Close any unclosed braces
+        open_braces = partial.count("{") - partial.count("}")
+        if open_braces > 0:
+            partial += "}" * open_braces
+        try:
+            return json.loads(partial)
+        except json.JSONDecodeError:
+            pass
+
     raise json.JSONDecodeError("No JSON object found", raw, 0)
 
 
