@@ -184,6 +184,10 @@ _CONFIRM_TEMPLATES: dict[str, dict[str, str]] = {
         "no_name":   "Of course. What is the patient's name?",
         "no_change": "No problem. What changes would you like to make? Let's start with the date.",
         "re_ask":    "I didn't catch that. {summary}. Please say Yes to confirm or No to change details.",
+        "booking":   "Booking {doctor}",
+        "for_symp":  "for {symptoms}",
+        "in_dept":   "in {dept}",
+        "on_at":     "on {date} at {time} for {name}",
     },
     "hindi": {
         "ask":       "{summary}. क्या मैं बुकिंग कन्फर्म करूं? हाँ या नहीं बोलें।",
@@ -193,6 +197,10 @@ _CONFIRM_TEMPLATES: dict[str, dict[str, str]] = {
         "no_name":   "बिल्कुल। मरीज का नाम क्या है?",
         "no_change": "कोई बात नहीं। क्या बदलना है? पहले तारीख बताएं।",
         "re_ask":    "मैं समझ नहीं पाया। {summary}. बुकिंग के लिए हाँ कहें या बदलाव के लिए नहीं।",
+        "booking":   "{doctor} के साथ अपॉइंटमेंट",
+        "for_symp":  "{symptoms} के लिए",
+        "in_dept":   "{dept} विभाग में",
+        "on_at":     "{date} को {time} बजे, मरीज: {name}",
     },
     "kannada": {
         "ask":       "{summary}. ನಾನು ಬುಕ್ ಮಾಡಲೇ? ಹೌದು ಅಥವಾ ಇಲ್ಲ ಎಂದು ಹೇಳಿ.",
@@ -202,6 +210,10 @@ _CONFIRM_TEMPLATES: dict[str, dict[str, str]] = {
         "no_name":   "ಸರಿ. ರೋಗಿಯ ಹೆಸರೇನು?",
         "no_change": "ಪರವಾಗಿಲ್ಲ. ಏನು ಬದಲಾಯಿಸಬೇಕು? ದಿನಾಂಕದಿಂದ ಪ್ರಾರಂಭಿಸೋಣ.",
         "re_ask":    "ಅರ್ಥವಾಗಲಿಲ್ಲ. {summary}. ಖಚಿತಪಡಿಸಲು ಹೌದು ಅಥವಾ ಬದಲಾಯಿಸಲು ಇಲ್ಲ ಎಂದು ಹೇಳಿ.",
+        "booking":   "{doctor} ಅವರೊಂದಿಗೆ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್",
+        "for_symp":  "{symptoms} ಗಾಗಿ",
+        "in_dept":   "{dept} ವಿಭಾಗದಲ್ಲಿ",
+        "on_at":     "{date} ರಂದು {time} ಕ್ಕೆ, ರೋಗಿ: {name}",
     },
     "telugu": {
         "ask":       "{summary}. నేను బుక్ చేయనా? అవును లేదా కాదు చెప్పండి.",
@@ -211,6 +223,10 @@ _CONFIRM_TEMPLATES: dict[str, dict[str, str]] = {
         "no_name":   "సరే. రోగి పేరు ఏమిటి?",
         "no_change": "పర్వాలేదు. ఏమి మార్చాలి? తేదీతో మొదలు పెడదాం.",
         "re_ask":    "అర్థం కాలేదు. {summary}. నిర్థారించడానికి అవును లేదా మార్చడానికి కాదు చెప్పండి.",
+        "booking":   "{doctor} తో అపాయింట్‌మెంట్",
+        "for_symp":  "{symptoms} కోసం",
+        "in_dept":   "{dept} విభాగంలో",
+        "on_at":     "{date} నాడు {time} కి, రోగి: {name}",
     },
 }
 
@@ -221,6 +237,21 @@ def _get_confirm_msg(language: str, key: str, summary: str = "") -> str:
     templates = _CONFIRM_TEMPLATES.get(lang_key) or _CONFIRM_TEMPLATES["english"]
     template = templates.get(key, _CONFIRM_TEMPLATES["english"][key])
     return template.format(summary=summary)
+
+
+def _build_confirmation_summary(language: str, doctor: str, symptoms,
+                                dept: str, date: str, time: str, name: str) -> str:
+    """Build the booking summary sentence in the caller's language."""
+    lang_key = language.lower()
+    t = _CONFIRM_TEMPLATES.get(lang_key) or _CONFIRM_TEMPLATES["english"]
+    booking = t["booking"].format(doctor=doctor)
+    if symptoms:
+        symp_str = ", ".join(symptoms) if isinstance(symptoms, list) else symptoms
+        detail = t["for_symp"].format(symptoms=symp_str)
+    else:
+        detail = t["in_dept"].format(dept=dept)
+    on_at = t["on_at"].format(date=date, time=time, name=name)
+    return f"{booking} {detail} {on_at}"
 
 
 class ConversationOrchestrator:
@@ -523,15 +554,9 @@ class ConversationOrchestrator:
         symptoms = ents.get("symptoms")
         dept     = ents.get("department", config.DEFAULT_DEPARTMENT)
 
-        summary_parts = [f"Booking {doctor}"]
-        if symptoms:
-            symp_str = ", ".join(symptoms) if isinstance(symptoms, list) else symptoms
-            summary_parts.append(f"for {symp_str}")
-        else:
-            summary_parts.append(f"in {dept}")
-        summary_parts.append(f"on {date} at {time} for {name}")
-
-        self._confirmation_summary = " ".join(summary_parts)
+        self._confirmation_summary = _build_confirmation_summary(
+            self.memory.language, doctor, symptoms, dept, date, time, name
+        )
         self._awaiting_confirmation = True
 
         msg = _get_confirm_msg(self.memory.language, "ask", self._confirmation_summary)
