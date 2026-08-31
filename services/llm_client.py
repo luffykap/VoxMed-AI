@@ -30,9 +30,26 @@ import config
 from processing.memory import ConversationMemory
 from utils.logger import get_logger
 
+import re
+
 logger = get_logger(__name__)
 
-# ── Legacy engine (kept for import compatibility, NOT used in hot path) ────────
+
+def _extract_json(raw: str) -> dict:
+    """Extract a JSON object from a raw string, tolerating markdown code fences."""
+    # Strip markdown code fences: ```json ... ``` or ``` ... ```
+    stripped = re.sub(r"```(?:json)?\s*", "", raw).replace("```", "").strip()
+    # Try direct parse first
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+    # Find first {...} block in the string (handles models that add prose)
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if match:
+        return json.loads(match.group())
+    raise json.JSONDecodeError("No JSON object found", raw, 0)
+
 
 def _get_legacy_engine():
     """Lazy-import the legacy regex engine — only used as last-resort offline fallback."""
@@ -203,8 +220,6 @@ async def _call_provider(
         payload["response_format"] = {"type": "json_object"}
 
     t0 = time.perf_counter()
-    if provider_name == "groq":
-        logger.error(f"Groq payload: {payload}")
     async with httpx.AsyncClient(timeout=config.LLM_TIMEOUT) as client:
         response = await client.post(
             f"{provider_cfg['base_url']}/chat/completions",
@@ -306,7 +321,7 @@ async def understand(
 
     try:
         raw = await _call_with_failover(messages, json_mode=True, max_tokens=config.LLM_MAX_TOKENS_UNDERSTANDING)
-        parsed = json.loads(raw)
+        parsed = _extract_json(raw)
 
         if detect_intent:
             result = {

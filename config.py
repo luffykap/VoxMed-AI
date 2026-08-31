@@ -119,7 +119,7 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "voxmed123")
 LLM_TEMPERATURE               = 0.1
 LLM_MAX_TOKENS_UNDERSTANDING  = 250
 LLM_MAX_TOKENS_RESPONSE       = 80
-LLM_TIMEOUT                   = 5  # Seconds before giving up on a provider and trying the next
+LLM_TIMEOUT                   = 8  # Seconds before giving up on a provider and trying the next
 
 # ── LLM — per-provider credentials ────────────────────────────
 # Each entry: (env_var_name, base_url, model)
@@ -137,20 +137,20 @@ LLM_PROVIDERS: dict[str, dict] = {
     "groq": {
         "api_key":  os.getenv("GROQ_API_KEY", ""),
         "base_url": "https://api.groq.com/openai/v1",
-        "model":    "llama-3.1-8b-instant",
-        "json_mode": True,
+        "model":    "openai/gpt-oss-20b",  # verified active on this account (2026-08)
+        "json_mode": False,  # gpt-oss returns 400 for response_format json_object
     },
     "groq_120b": {
         "api_key":  os.getenv("GROQ_API_KEY", ""),
         "base_url": "https://api.groq.com/openai/v1",
-        "model":    "llama-3.3-70b-versatile",
+        "model":    "openai/gpt-oss-120b",  # verified active on this account (2026-08)
         "json_mode": False,
     },
-    "groq_20b": {
+    "groq_qwen": {
         "api_key":  os.getenv("GROQ_API_KEY", ""),
         "base_url": "https://api.groq.com/openai/v1",
-        "model":    "openai/gpt-oss-20b",  # confirmed available on this Groq account
-        "json_mode": False,  # gpt-oss models return 400 for response_format json_object
+        "model":    "qwen/qwen3.8-27b",  # verified active on this account (2026-08)
+        "json_mode": True,
     },
     # cerebras: disabled — account requires payment (402)
     # mistral:  disabled — invalid API key (401)
@@ -161,8 +161,8 @@ LLM_PROVIDERS: dict[str, dict] = {
     },
 }
 
-# Failover order: Gemini (primary) → Gemini 2 (fallback) → Groq primary → Groq secondary → OpenRouter
-LLM_PROVIDER_CHAIN: list[str] = ["gemini", "gemini_2", "groq", "groq_120b", "openrouter"]
+# Failover order: Gemini (primary) → Gemini 2 → Groq 20B → Groq 120B → Groq Qwen → OpenRouter
+LLM_PROVIDER_CHAIN: list[str] = ["gemini", "gemini_2", "groq", "groq_120b", "groq_qwen", "openrouter"]
 
 # ── Admin Dashboard Credentials ────────────────────────────────
 ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
