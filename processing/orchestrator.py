@@ -57,12 +57,30 @@ _SWITCHABLE_INTENTS = {
 # Confirmation yes/no patterns (no LLM needed for simple affirm/deny)
 _CONFIRM_YES = re.compile(
     r"\b(yes|yeah|yep|yup|correct|confirm|confirmed|ok|okay|sure|go ahead|book it|do it|that'?s right|right|perfect|sounds good|"
-    r"haan|han|ji haan|sari|avunu|houdu|sari)\b",
+    r"haan|han|ji haan|sari|avunu|houdu|sari|yas|yass|ya|yep|yaa)\b"
+    r"|"
+    # Native Devanagari (Hindi) — must be outside \b word boundaries
+    r"(हाँ|हां|हा\b|जी|जी हाँ|जी हां|ठीक है|बुक करो|बुक कर दो|कर दीजिए|कन्फर्म|कंफर्म|सही है|बिल्कुल|ज़रूर|ज़रूर करें)"
+    r"|"
+    # Native Telugu
+    r"(అవును|సరే|ఓకే|బుక్ చేయి)"
+    r"|"
+    # Native Kannada
+    r"(ಹೌದು|ಸರಿ|ಓಕೆ|ಬುಕ್ ಮಾಡಿ)",
     re.IGNORECASE,
 )
 _CONFIRM_NO = re.compile(
     r"\b(no|nope|nah|wrong|incorrect|change|wait|actually|different|not that|not right|cancel that|let me|i want to change|"
-    r"nahi|na|illa|bede|bedi|kadu|vaddu)\b",
+    r"nahi|na|illa|bede|bedi|kadu|vaddu)\b"
+    r"|"
+    # Native Devanagari (Hindi)
+    r"(नहीं|नही|मत|रुको|बदलो|गलत)"
+    r"|"
+    # Native Telugu
+    r"(కాదు|వద్దు|మార్చు)"
+    r"|"
+    # Native Kannada
+    r"(ಬೇಡ|ಇಲ್ಲ|ತಪ್ಪು)",
     re.IGNORECASE,
 )
 
@@ -154,6 +172,55 @@ _SLOT_TEMPLATES = {
         },
     }
 }
+
+# Deterministic confirmation-phase messages — no LLM needed.
+# generate_reply() is unreliable for prose on gpt-oss models (returns empty).
+_CONFIRM_TEMPLATES: dict[str, dict[str, str]] = {
+    "english": {
+        "ask":       "{summary}. Shall I confirm? Please say Yes or No.",
+        "no_date":   "No problem. What date would you prefer?",
+        "no_time":   "Sure. What time would you prefer?",
+        "no_doctor": "Understood. Which doctor would you like to see?",
+        "no_name":   "Of course. What is the patient's name?",
+        "no_change": "No problem. What changes would you like to make? Let's start with the date.",
+        "re_ask":    "I didn't catch that. {summary}. Please say Yes to confirm or No to change details.",
+    },
+    "hindi": {
+        "ask":       "{summary}. क्या मैं बुकिंग कन्फर्म करूं? हाँ या नहीं बोलें।",
+        "no_date":   "ठीक है। आप किस तारीख को अपॉइंटमेंट चाहते हैं?",
+        "no_time":   "ठीक है। आप किस समय पर अपॉइंटमेंट चाहते हैं?",
+        "no_doctor": "समझ गया। आप किस डॉक्टर से मिलना चाहते हैं?",
+        "no_name":   "बिल्कुल। मरीज का नाम क्या है?",
+        "no_change": "कोई बात नहीं। क्या बदलना है? पहले तारीख बताएं।",
+        "re_ask":    "मैं समझ नहीं पाया। {summary}. बुकिंग के लिए हाँ कहें या बदलाव के लिए नहीं।",
+    },
+    "kannada": {
+        "ask":       "{summary}. ನಾನು ಬುಕ್ ಮಾಡಲೇ? ಹೌದು ಅಥವಾ ಇಲ್ಲ ಎಂದು ಹೇಳಿ.",
+        "no_date":   "ಸರಿ. ಯಾವ ದಿನಾಂಕ ಬೇಕು?",
+        "no_time":   "ಸರಿ. ಯಾವ ಸಮಯ ಬೇಕು?",
+        "no_doctor": "ಅರ್ಥವಾಯಿತು. ಯಾವ ವೈದ್ಯರನ್ನು ನೋಡಲು ಬಯಸುತ್ತೀರಿ?",
+        "no_name":   "ಸರಿ. ರೋಗಿಯ ಹೆಸರೇನು?",
+        "no_change": "ಪರವಾಗಿಲ್ಲ. ಏನು ಬದಲಾಯಿಸಬೇಕು? ದಿನಾಂಕದಿಂದ ಪ್ರಾರಂಭಿಸೋಣ.",
+        "re_ask":    "ಅರ್ಥವಾಗಲಿಲ್ಲ. {summary}. ಖಚಿತಪಡಿಸಲು ಹೌದು ಅಥವಾ ಬದಲಾಯಿಸಲು ಇಲ್ಲ ಎಂದು ಹೇಳಿ.",
+    },
+    "telugu": {
+        "ask":       "{summary}. నేను బుక్ చేయనా? అవును లేదా కాదు చెప్పండి.",
+        "no_date":   "సరే. ఏ తేదీ కావాలి?",
+        "no_time":   "సరే. ఏ సమయం కావాలి?",
+        "no_doctor": "అర్థమైంది. ఏ వైద్యుడిని కలవాలనుకుంటున్నారు?",
+        "no_name":   "సరే. రోగి పేరు ఏమిటి?",
+        "no_change": "పర్వాలేదు. ఏమి మార్చాలి? తేదీతో మొదలు పెడదాం.",
+        "re_ask":    "అర్థం కాలేదు. {summary}. నిర్థారించడానికి అవును లేదా మార్చడానికి కాదు చెప్పండి.",
+    },
+}
+
+
+def _get_confirm_msg(language: str, key: str, summary: str = "") -> str:
+    """Return a deterministic confirmation-phase message in the caller's language."""
+    lang_key = language.lower()
+    templates = _CONFIRM_TEMPLATES.get(lang_key) or _CONFIRM_TEMPLATES["english"]
+    template = templates.get(key, _CONFIRM_TEMPLATES["english"][key])
+    return template.format(summary=summary)
 
 
 class ConversationOrchestrator:
@@ -467,11 +534,10 @@ class ConversationOrchestrator:
         self._confirmation_summary = " ".join(summary_parts)
         self._awaiting_confirmation = True
 
-        msg = f"{self._confirmation_summary}. Shall I confirm? (Yes / No)"
+        msg = _get_confirm_msg(self.memory.language, "ask", self._confirmation_summary)
         logger.info("Awaiting booking confirmation | summary=%s", self._confirmation_summary)
         save_ai_log("DM", "INFO", f"Confirmation requested: {self._confirmation_summary}")
-        reply = await llm_client.generate_reply(self.memory, {"success": True, "message": msg}, self.memory.language)
-        return self._commit_reply(reply)
+        return self._commit_reply(msg)
 
     async def _handle_confirmation(self, user_text: str) -> str:
         """
@@ -491,38 +557,35 @@ class ConversationOrchestrator:
         if _CONFIRM_NO.search(user_text):
             # User wants to change something — figure out which slot to clear
             self._awaiting_confirmation = False
-            ents = self.memory.entities
 
             # Heuristic: check which entity the user mentioned
             text_lower = user_text.lower()
             if any(w in text_lower for w in ("date", "day", "when", "din", "tarikh", "roju", "dina")):
                 self.memory.entities["date"] = None
                 self.memory.entities["time"] = None
-                msg = "No problem. What date would you prefer?"
+                msg = _get_confirm_msg(self.memory.language, "no_date")
             elif any(w in text_lower for w in ("time", "hour", "o'clock", "am", "pm", "samay", "baje", "samaya", "vela")):
                 self.memory.entities["time"] = None
-                msg = "Sure. What time would you prefer?"
+                msg = _get_confirm_msg(self.memory.language, "no_time")
             elif any(w in text_lower for w in ("doctor", "dr", "physician", "doctoru", "daaktar")):
                 self.memory.entities["doctor"] = None
-                msg = "Understood. Which doctor would you like to see?"
+                msg = _get_confirm_msg(self.memory.language, "no_doctor")
             elif any(w in text_lower for w in ("name", "patient", "naam", "peshent", "rogi", "hesaru", "peru")):
                 self.memory.entities["patient_name"] = None
-                msg = "Of course. What is the patient's name?"
+                msg = _get_confirm_msg(self.memory.language, "no_name")
             else:
                 # Can't tell what to change — clear date/time and restart slot filling
                 self.memory.entities["date"] = None
                 self.memory.entities["time"] = None
-                msg = "No problem. What changes would you like to make? Let's start with the date."
+                msg = _get_confirm_msg(self.memory.language, "no_change")
 
             logger.info("Booking cancelled by user — re-entering slot filling")
             save_ai_log("DM", "INFO", "Booking cancelled by user, re-entering slot fill")
-            reply = await llm_client.generate_reply(self.memory, {"success": True, "message": msg}, self.memory.language)
-            return self._commit_reply(reply)
+            return self._commit_reply(msg)
 
         # Unclear response — repeat the confirmation question
-        msg = f"I didn't catch that. {self._confirmation_summary}. Please say Yes to confirm or No to change details."
-        reply = await llm_client.generate_reply(self.memory, {"success": True, "message": msg}, self.memory.language)
-        return self._commit_reply(reply)
+        msg = _get_confirm_msg(self.memory.language, "re_ask", self._confirmation_summary)
+        return self._commit_reply(msg)
 
     # ── Intent execution ──────────────────────────────────────────────────────
 
