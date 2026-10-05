@@ -28,6 +28,9 @@ _psycopg2_patched = False
 # ── Thin compatibility wrapper ────────────────────────────────────────────────
 def _adapt_sql(sql: str) -> str:
     """Replace SQLite-style ? placeholders with PostgreSQL %s."""
+    if isinstance(sql, bytes):
+        # psycopg2.extras.execute_batch passes pre-merged bytes (already %s-style)
+        return sql
     if _USE_POSTGRES:
         sql = sql.replace("LIKE ? COLLATE NOCASE", "ILIKE %s")
         sql = sql.replace("= ? COLLATE NOCASE", "ILIKE %s")
