@@ -17,9 +17,10 @@ def test_check_availability():
     assert type(available) == bool
     assert "slots on" in msg or "fully booked" in msg
 
-def test_book_appointment_success():
+@pytest.mark.asyncio
+async def test_book_appointment_success():
     today = date.today().isoformat()
-    success, msg, context = book_appointment(
+    success, msg, context = await book_appointment(
         name="Test User",
         doctor="Dr. Sharma",
         department="General Medicine",
@@ -33,9 +34,10 @@ def test_book_appointment_success():
     assert isinstance(msg, str)
     assert isinstance(context, dict)
 
-def test_book_appointment_past_date():
+@pytest.mark.asyncio
+async def test_book_appointment_past_date():
     past_date = (date.today() - timedelta(days=1)).isoformat()
-    success, msg, context = book_appointment(
+    success, msg, context = await book_appointment(
         name="Test User",
         doctor="Dr. Sharma",
         department="General Medicine",
@@ -50,7 +52,7 @@ def test_cancel_nonexistent_appointment():
     today = date.today().isoformat()
     success, msg = cancel_appointment("Nonexistent User", today)
     assert not success
-    assert "couldn't find a patient record" in msg
+    assert "couldn't find" in msg
 
 def test_reschedule_past_date():
     today = date.today().isoformat()

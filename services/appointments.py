@@ -142,90 +142,125 @@ def _get_doctor_id(doctor_name: str, cursor) -> Optional[int]:
 
     return best_match
 
+_CLINIC_TZ = "Asia/Kolkata"
+
+
+def _slot_request_error(date: str, time: str) -> Optional[str]:
+    """Validate a requested date/time. Returns an error message, or None if OK."""
+    from datetime import datetime, date as _date
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo(_CLINIC_TZ))
+    except Exception:  # tzdata missing — fall back to server local time
+        now = datetime.now()
+
+    if not date or str(date).upper() == "ANY":
+        return "Please tell me a specific date for the appointment."
+    if not time or str(time).upper() == "ANY":
+        return "Please tell me a specific time for the appointment."
+
+    try:
+        _date.fromisoformat(date)
+    except (ValueError, TypeError):
+        return f"I couldn't understand the date {date}. Please give a valid date."
+
+    if date < now.date().isoformat():
+        return f"The date {date} is in the past. Please choose a date from today onwards."
+    if date == now.date().isoformat() and time < now.strftime("%H:%M"):
+        return f"The time {time} has already passed today. Please choose a later time."
+    return None
+
+
+def _claim_slot(cursor, slot_id: int) -> bool:
+    """
+    Atomically mark a slot as booked. Returns True only if THIS call flipped it
+    from free to booked, so two concurrent bookings cannot both succeed.
+    """
+    cursor.execute(
+        _adapt_sql("UPDATE Slots SET is_booked = ? WHERE id = ? AND is_booked = ?"),
+        _adapt_params([True if _USE_POSTGRES else 1, slot_id, False if _USE_POSTGRES else 0]),
+    )
+    return cursor.rowcount == 1
+
+
 async def book_appointment(name: str, doctor: str, department: str, symptoms: list[str], date: str, time: str) -> tuple[bool, str, dict]:
-    from datetime import date as _date
-    # Reject past dates immediately
-    if date and date != "ANY":
-        try:
-            if date < _date.today().isoformat():
-                return False, f"The date {date} is in the past. Please choose a date from today onwards.", {}
-        except (ValueError, TypeError):
-            pass
+    err = _slot_request_error(date, time)
+    if err:
+        return False, err, {}
+
     patient_id = _get_or_create_patient(name)
     conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        cursor = conn.cursor()
 
-    doctor_id = _get_doctor_id(doctor, cursor)
-    resolved_dept = department
+        doctor_id = _get_doctor_id(doctor, cursor)
+        resolved_dept = department
 
-    if not doctor_id:
-        # If department is missing, try to infer from symptoms using LLM
-        if not department and symptoms:
-            resolved_dept = await _map_symptoms_to_department(symptoms) or "General Medicine"
+        if not doctor_id:
+            # If department is missing, try to infer from symptoms using LLM
+            if not department and symptoms:
+                resolved_dept = await _map_symptoms_to_department(symptoms) or "General Medicine"
 
-        if _USE_POSTGRES:
-            cursor.execute(
-                "SELECT id FROM Departments WHERE lower(name) = lower(%s)", (resolved_dept,)
-            )
-        else:
-            cursor.execute(
-                "SELECT id FROM Departments WHERE name = ? COLLATE NOCASE", (resolved_dept,)
-            )
-        dept_row = cursor.fetchone()
+            if _USE_POSTGRES:
+                cursor.execute(
+                    "SELECT id FROM Departments WHERE lower(name) = lower(%s)", (resolved_dept,)
+                )
+            else:
+                cursor.execute(
+                    "SELECT id FROM Departments WHERE name = ? COLLATE NOCASE", (resolved_dept,)
+                )
+            dept_row = cursor.fetchone()
 
-        if dept_row:
-            dept_id = dept_row["id"]
-            booked_val = False if _USE_POSTGRES else 0
-            cursor.execute(
-                _adapt_sql("""
-                    SELECT s.doctor_id FROM Slots s
-                    JOIN Doctors d ON s.doctor_id = d.id
-                    WHERE d.department_id = ? AND s.slot_date = ? AND s.slot_time = ? AND s.is_booked = ?
-                    LIMIT 1
-                """),
-                _adapt_params([dept_id, date, time, booked_val]),
-            )
-            row = cursor.fetchone()
-            if row:
-                doctor_id = row["doctor_id"]
+            if dept_row:
+                dept_id = dept_row["id"]
+                booked_val = False if _USE_POSTGRES else 0
+                cursor.execute(
+                    _adapt_sql("""
+                        SELECT s.doctor_id FROM Slots s
+                        JOIN Doctors d ON s.doctor_id = d.id
+                        WHERE d.department_id = ? AND s.slot_date = ? AND s.slot_time = ? AND s.is_booked = ?
+                        LIMIT 1
+                    """),
+                    _adapt_params([dept_id, date, time, booked_val]),
+                )
+                row = cursor.fetchone()
+                if row:
+                    doctor_id = row["doctor_id"]
 
-    if not doctor_id:
+        if not doctor_id:
+            return False, f"Sorry, there are no doctors available in {resolved_dept or 'General Medicine'} on {date} at {time}.", {}
+
+        # Get doctor name for the response
+        cursor.execute(_adapt_sql("SELECT name FROM Doctors WHERE id = ?"), _adapt_params([doctor_id]))
+        final_doctor_name = cursor.fetchone()["name"]
+
+        # Find the specific slot
+        cursor.execute(
+            _adapt_sql("SELECT id, is_booked FROM Slots WHERE doctor_id = ? AND slot_date = ? AND slot_time = ?"),
+            _adapt_params([doctor_id, date, time]),
+        )
+        slot = cursor.fetchone()
+
+        if not slot:
+            return False, f"Sorry, {final_doctor_name} does not have a shift on {date} at {time}.", {}
+
+        # Atomic claim — protects against concurrent double-booking
+        if not _claim_slot(cursor, slot["id"]):
+            conn.rollback()
+            return False, f"Sorry, that slot is already booked on {date} at {time}.", {}
+
+        cursor.execute(
+            _adapt_sql(
+                "INSERT INTO Appointments (patient_id, doctor_id, slot_id, status) VALUES (?, ?, ?, 'BOOKED')"
+            ),
+            _adapt_params([patient_id, doctor_id, slot["id"]]),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
         conn.close()
-        return False, f"Sorry, there are no doctors available in {resolved_dept or 'General Medicine'} on {date} at {time}.", {}
-
-    # Get doctor name for the response
-    cursor.execute(_adapt_sql("SELECT name FROM Doctors WHERE id = ?"), _adapt_params([doctor_id]))
-    final_doctor_name = cursor.fetchone()["name"]
-
-    # Find the specific slot
-    cursor.execute(
-        _adapt_sql("SELECT id, is_booked FROM Slots WHERE doctor_id = ? AND slot_date = ? AND slot_time = ?"),
-        _adapt_params([doctor_id, date, time]),
-    )
-    slot = cursor.fetchone()
-
-    if not slot:
-        conn.close()
-        return False, f"Sorry, {final_doctor_name} does not have a shift on {date} at {time}.", {}
-
-    if slot["is_booked"]:
-        conn.close()
-        return False, f"Sorry, that slot is already booked on {date} at {time}.", {}
-
-    # Book the slot
-    cursor.execute(
-        _adapt_sql("UPDATE Slots SET is_booked = ? WHERE id = ?"),
-        _adapt_params([True if _USE_POSTGRES else 1, slot["id"]]),
-    )
-    cursor.execute(
-        _adapt_sql(
-            "INSERT INTO Appointments (patient_id, doctor_id, slot_id, status) VALUES (?, ?, ?, 'BOOKED')"
-        ),
-        _adapt_params([patient_id, doctor_id, slot["id"]]),
-    )
-
-    conn.commit()
-    conn.close()
 
     context = {
         "doctor": final_doctor_name,
@@ -243,132 +278,116 @@ async def book_appointment(name: str, doctor: str, department: str, symptoms: li
 
     return True, msg, context
 
+
+def _find_booked_appointments(cursor, name: str, date: str) -> list:
+    """
+    Find BOOKED appointments on `date` for any patient whose name matches
+    `name` (after the same cleaning used at booking time), earliest first.
+    """
+    clean = _clean_patient_name(name)
+    if _USE_POSTGRES:
+        name_clause = "lower(p.name) = lower(%s)"
+    else:
+        name_clause = "p.name = ? COLLATE NOCASE"
+    cursor.execute(
+        _adapt_sql(f"""
+            SELECT a.id AS appt_id, a.patient_id, a.doctor_id, s.id AS slot_id, s.slot_time
+            FROM Appointments a
+            JOIN Slots s    ON a.slot_id = s.id
+            JOIN Patients p ON a.patient_id = p.id
+            WHERE {name_clause} AND s.slot_date = ? AND a.status = 'BOOKED'
+            ORDER BY s.slot_time
+        """),
+        _adapt_params([clean, date]),
+    )
+    return cursor.fetchall()
+
+
 def cancel_appointment(name: str, date: str) -> tuple[bool, str]:
     conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        cursor = conn.cursor()
+        appts = _find_booked_appointments(cursor, name, date)
+        if not appts:
+            return False, f"Sorry, I couldn't find a booked appointment on {date} for {name}."
 
-    if _USE_POSTGRES:
-        cursor.execute("SELECT id FROM Patients WHERE lower(name) = lower(%s)", (name,))
-    else:
-        cursor.execute("SELECT id FROM Patients WHERE name = ? COLLATE NOCASE", (name,))
-    row = cursor.fetchone()
-    if not row:
+        appt = appts[0]
+        booked_false = False if _USE_POSTGRES else 0
+        cursor.execute(
+            _adapt_sql("UPDATE Slots SET is_booked = ? WHERE id = ?"),
+            _adapt_params([booked_false, appt["slot_id"]]),
+        )
+        cursor.execute(
+            _adapt_sql("UPDATE Appointments SET status = 'CANCELED' WHERE id = ?"),
+            _adapt_params([appt["appt_id"]]),
+        )
+        conn.commit()
+        return True, f"Your appointment on {date} has been successfully canceled."
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
         conn.close()
-        return False, f"Sorry, I couldn't find a patient record for {name}."
 
-    patient_id = row["id"]
-
-    cursor.execute(
-        _adapt_sql("""
-            SELECT a.id as appt_id, s.id as slot_id
-            FROM Appointments a
-            JOIN Slots s ON a.slot_id = s.id
-            WHERE a.patient_id = ? AND s.slot_date = ? AND a.status = 'BOOKED'
-        """),
-        _adapt_params([patient_id, date]),
-    )
-    appt = cursor.fetchone()
-    if not appt:
-        conn.close()
-        return False, f"Sorry, I couldn't find a booked appointment on {date} for {name}."
-
-    booked_false = False if _USE_POSTGRES else 0
-    cursor.execute(
-        _adapt_sql("UPDATE Slots SET is_booked = ? WHERE id = ?"),
-        _adapt_params([booked_false, appt["slot_id"]]),
-    )
-    cursor.execute(
-        _adapt_sql("UPDATE Appointments SET status = 'CANCELED' WHERE id = ?"),
-        _adapt_params([appt["appt_id"]]),
-    )
-
-    conn.commit()
-    conn.close()
-
-    return True, f"Your appointment on {date} has been successfully canceled."
 
 def reschedule_appointment(name: str, current_date: str, new_date: str, new_time: str) -> tuple[bool, str]:
-    from datetime import date as _date
-    if new_date and new_date != "ANY":
-        try:
-            if new_date < _date.today().isoformat():
-                return False, f"The date {new_date} is in the past. Please choose a date from today onwards."
-        except (ValueError, TypeError):
-            pass
+    err = _slot_request_error(new_date, new_time)
+    if err:
+        return False, err
 
     conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        cursor = conn.cursor()
+        appts = _find_booked_appointments(cursor, name, current_date)
+        if not appts:
+            return False, f"Sorry, I couldn't find a booked appointment on {current_date} for {name}."
 
-    if _USE_POSTGRES:
-        cursor.execute("SELECT id FROM Patients WHERE lower(name) = lower(%s)", (name,))
-    else:
-        cursor.execute("SELECT id FROM Patients WHERE name = ? COLLATE NOCASE", (name,))
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
-        return False, f"Sorry, I couldn't find a patient record for {name}."
-
-    patient_id = row["id"]
-
-    cursor.execute(
-        _adapt_sql("""
-            SELECT a.id as appt_id, a.doctor_id, s.id as old_slot_id
-            FROM Appointments a
-            JOIN Slots s ON a.slot_id = s.id
-            WHERE a.patient_id = ? AND s.slot_date = ? AND a.status = 'BOOKED'
-            LIMIT 1
-        """),
-        _adapt_params([patient_id, current_date]),
-    )
-    appt = cursor.fetchone()
-    if not appt:
-        conn.close()
-        return False, f"Sorry, I couldn't find a booked appointment on {current_date} for {name}."
-
-    booked_false = False if _USE_POSTGRES else 0
-    cursor.execute(
-        _adapt_sql(
-            "SELECT id FROM Slots "
-            "WHERE doctor_id = ? AND slot_date = ? AND slot_time = ? AND is_booked = ?"
-        ),
-        _adapt_params([appt["doctor_id"], new_date, new_time, booked_false]),
-    )
-    new_slot = cursor.fetchone()
-
-    if not new_slot:
+        appt = appts[0]
+        booked_false = False if _USE_POSTGRES else 0
         cursor.execute(
-            _adapt_sql("SELECT name FROM Doctors WHERE id = ?"),
-            _adapt_params([appt["doctor_id"]]),
+            _adapt_sql(
+                "SELECT id FROM Slots "
+                "WHERE doctor_id = ? AND slot_date = ? AND slot_time = ? AND is_booked = ?"
+            ),
+            _adapt_params([appt["doctor_id"], new_date, new_time, booked_false]),
         )
-        doc_name = cursor.fetchone()["name"]
+        new_slot = cursor.fetchone()
+
+        if not new_slot:
+            cursor.execute(
+                _adapt_sql("SELECT name FROM Doctors WHERE id = ?"),
+                _adapt_params([appt["doctor_id"]]),
+            )
+            doc_name = cursor.fetchone()["name"]
+            return False, f"Sorry, {doc_name} is not available on {new_date} at {new_time}."
+
+        # Claim the new slot atomically BEFORE releasing the old one
+        if not _claim_slot(cursor, new_slot["id"]):
+            conn.rollback()
+            return False, f"Sorry, that slot was just taken on {new_date} at {new_time}."
+
+        cursor.execute(
+            _adapt_sql("UPDATE Slots SET is_booked = ? WHERE id = ?"),
+            _adapt_params([booked_false, appt["slot_id"]]),
+        )
+        cursor.execute(
+            _adapt_sql("UPDATE Appointments SET status = 'RESCHEDULED' WHERE id = ?"),
+            _adapt_params([appt["appt_id"]]),
+        )
+        cursor.execute(
+            _adapt_sql(
+                "INSERT INTO Appointments (patient_id, doctor_id, slot_id, status) "
+                "VALUES (?, ?, ?, 'BOOKED')"
+            ),
+            _adapt_params([appt["patient_id"], appt["doctor_id"], new_slot["id"]]),
+        )
+        conn.commit()
+        return True, f"Your appointment has been successfully rescheduled from {current_date} to {new_date} at {new_time}."
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
         conn.close()
-        return False, f"Sorry, {doc_name} is not available on {new_date} at {new_time}."
-
-    booked_true = True if _USE_POSTGRES else 1
-    cursor.execute(
-        _adapt_sql("UPDATE Slots SET is_booked = ? WHERE id = ?"),
-        _adapt_params([booked_false, appt["old_slot_id"]]),
-    )
-    cursor.execute(
-        _adapt_sql("UPDATE Appointments SET status = 'RESCHEDULED' WHERE id = ?"),
-        _adapt_params([appt["appt_id"]]),
-    )
-    cursor.execute(
-        _adapt_sql("UPDATE Slots SET is_booked = ? WHERE id = ?"),
-        _adapt_params([booked_true, new_slot["id"]]),
-    )
-    cursor.execute(
-        _adapt_sql(
-            "INSERT INTO Appointments (patient_id, doctor_id, slot_id, status) "
-            "VALUES (?, ?, ?, 'BOOKED')"
-        ),
-        _adapt_params([patient_id, appt["doctor_id"], new_slot["id"]]),
-    )
-
-    conn.commit()
-    conn.close()
-
-    return True, f"Your appointment has been successfully rescheduled from {current_date} to {new_date} at {new_time}."
 
 def check_availability(date: str) -> tuple[bool, str]:
     conn = get_connection()
