@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse
-from twilio.twiml.voice_response import VoiceResponse, Gather
+from twilio.twiml.voice_response import VoiceResponse, Gather, Dial
+import os
 from typing import Dict
 
 from processing.orchestrator import ConversationOrchestrator
@@ -79,18 +80,85 @@ async def twilio_incoming(request: Request):
     logger.info("Incoming Twilio call | CallSid=%s", call_sid)
 
     response = VoiceResponse()
-    gather = Gather(
+    
+    gather_emergency = Gather(
+        numDigits=1,
+        action="/twilio/emergency_check",
+        method="POST",
+        timeout=3
+    )
+    gather_emergency.say(
+        "Welcome to VoxMed AI. If this is a medical emergency, press 0 to connect directly with our human receptionist. Otherwise, please stay on the line to select your preferred language.",
+        language="en-IN"
+    )
+    response.append(gather_emergency)
+    
+    # Fallback if the user doesn't press anything in the emergency gather
+    response.redirect("/twilio/language_menu", method="POST")
+    
+    return HTMLResponse(content=str(response), media_type="application/xml")
+
+@router.post("/twilio/language_menu")
+async def twilio_language_menu(request: Request):
+    """Webhook for language selection (after emergency check)."""
+    response = VoiceResponse()
+    
+    gather_lang = Gather(
         numDigits=1,
         action="/twilio/language_selected",
         method="POST",
         timeout=5
     )
-    gather.say(f"Welcome to VoxMed AI. {_PHRASES['en']['greeting_suffix']}", language="en-IN")
-    response.append(gather)
+    gather_lang.say(f"{_PHRASES['en']['greeting_suffix']}", language="en-IN")
+    response.append(gather_lang)
     
-    # Fallback if the user doesn't press anything
+    # Fallback if the user doesn't press anything in the language menu
     response.redirect("/twilio/language_selected?Digits=1", method="POST")
     
+    return HTMLResponse(content=str(response), media_type="application/xml")
+
+@router.post("/twilio/emergency_check")
+async def twilio_emergency_check(request: Request):
+    """Webhook triggered by the emergency gather."""
+    form_data = await request.form()
+    digits = form_data.get("Digits", "")
+    
+    response = VoiceResponse()
+    
+    if digits == "0":
+        response.say("Please hold while we connect you to our receptionist.", language="en-IN")
+        
+        receptionist_phone = os.getenv("RECEPTIONIST_PHONE", "+1234567890")
+        
+        # Dial with action to handle failure
+        dial = Dial(
+            action="/twilio/emergency_transfer_status",
+            method="POST",
+            timeout=20
+        )
+        dial.number(receptionist_phone)
+        response.append(dial)
+    else:
+        # User pressed something else (e.g. 1), so redirect to language selection
+        # By appending Digits to query params, language_selected will pick it up
+        response.redirect(f"/twilio/language_selected?Digits={digits}", method="POST")
+        
+    return HTMLResponse(content=str(response), media_type="application/xml")
+
+@router.post("/twilio/emergency_transfer_status")
+async def twilio_emergency_transfer_status(request: Request):
+    """Webhook triggered when the dial to receptionist ends or fails."""
+    form_data = await request.form()
+    dial_status = form_data.get("DialCallStatus", "")
+    
+    response = VoiceResponse()
+    
+    if dial_status not in ["completed", "answered"]:
+        response.say("I'm sorry, our receptionist is currently unavailable. Please contact your local emergency services immediately for a medical emergency.", language="en-IN")
+        
+        # Do not disconnect the caller unnecessarily - redirect to existing language menu
+        response.redirect("/twilio/language_menu", method="POST")
+        
     return HTMLResponse(content=str(response), media_type="application/xml")
 
 @router.post("/twilio/language_selected")
