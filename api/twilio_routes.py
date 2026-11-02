@@ -132,14 +132,19 @@ async def twilio_language_menu(request: Request):
 async def twilio_emergency_check(request: Request):
     """Webhook triggered by the emergency gather."""
     form_data = await request.form()
+    call_sid = form_data.get("CallSid", "")
     digits = form_data.get("Digits", "")
     
     response = VoiceResponse()
     
     if digits == "0":
-        response.say("Please hold while we connect you to our receptionist.", language="en-IN")
-        
+        transfer_msg = "Please hold while we connect you to our receptionist."
         receptionist_phone = os.getenv("RECEPTIONIST_PHONE", "+1234567890")
+        logger.info(
+            "Emergency Option Selected | CallSid=%s | Digits=%s | Action='Transfer to human receptionist' | Dial=%s | Prompt=%r",
+            call_sid, digits, receptionist_phone, transfer_msg,
+        )
+        response.say(transfer_msg, language="en-IN")
         
         # Dial with action to handle failure
         dial = Dial(
@@ -160,12 +165,16 @@ async def twilio_emergency_check(request: Request):
 async def twilio_emergency_transfer_status(request: Request):
     """Webhook triggered when the dial to receptionist ends or fails."""
     form_data = await request.form()
+    call_sid = form_data.get("CallSid", "")
     dial_status = form_data.get("DialCallStatus", "")
+    logger.info("Emergency Transfer Status | CallSid=%s | DialCallStatus=%s", call_sid, dial_status)
     
     response = VoiceResponse()
     
     if dial_status not in ["completed", "answered"]:
-        response.say("I'm sorry, our receptionist is currently unavailable. Please contact your local emergency services immediately for a medical emergency.", language="en-IN")
+        fallback_msg = "I'm sorry, our receptionist is currently unavailable. Please contact your local emergency services immediately for a medical emergency."
+        logger.info("Emergency Transfer Fallback | CallSid=%s | Prompt=%r", call_sid, fallback_msg)
+        response.say(fallback_msg, language="en-IN")
         
         # Do not disconnect the caller unnecessarily - redirect to existing language menu
         response.redirect("/twilio/language_menu", method="POST")
