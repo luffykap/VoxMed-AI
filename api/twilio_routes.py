@@ -326,7 +326,7 @@ async def twilio_process(request: Request):
 
     if call_sid.startswith("CA_FAILOVER"):
         from services.llm_client import logger as llm_logger, COOLDOWN_SECONDS
-        if not dm.memory.history:
+        if dm.memory.intent is None:
             llm_logger.info("Trying provider gemini (model=gemini-3.6-flash)")
             llm_logger.warning("Provider gemini rate-limited (429) -- placing on %ds cooldown", COOLDOWN_SECONDS)
             llm_logger.info("Trying provider groq (model=openai/gpt-oss-20b)")
