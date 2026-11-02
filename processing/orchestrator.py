@@ -921,7 +921,16 @@ class ConversationOrchestrator:
         date = ents.get("date")
         time = ents.get("time")
         doctor = ents.get("doctor")
-        dept = ents.get("department", config.DEFAULT_DEPARTMENT)
+        dept = ents.get("department")
+        if not dept and ents.get("symptoms"):
+            symptoms = ents["symptoms"]
+            if isinstance(symptoms, str):
+                symptoms = [symptoms]
+            dept = await _appt._map_symptoms_to_department(symptoms)
+            if dept:
+                ents["department"] = dept
+        if not dept:
+            dept = config.DEFAULT_DEPARTMENT
 
         # Try to book a dry-run check via the existing slot search
         alternatives = self._find_alternative_slots(date)

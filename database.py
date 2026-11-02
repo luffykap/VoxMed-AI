@@ -160,6 +160,7 @@ def _ensure_schema(conn) -> None:
     _create_tables_if_missing(conn)
     _migrate_multi_hospital(conn)
     _seed_default_hospitals(conn)
+    _ensure_hospital_doctors_and_slots(conn)
 
     # Seed SymptomMappings if the table was just empty
     cursor = conn.cursor()
@@ -438,6 +439,118 @@ def _seed_default_hospitals(conn) -> None:
             )
     conn.commit()
     logger.info("Seeded %d default hospitals", len(DEFAULT_HOSPITALS))
+
+
+def _ensure_hospital_doctors_and_slots(conn) -> None:
+    """
+    When migrating an existing single-hospital DB (e.g. NeonDB on Render) to multi-hospital,
+    Hospital 1 already has doctors, while Hospitals 2 and 3 have 0 doctors.
+    Seed departments, doctors, and 7-day slots for any hospital missing doctors,
+    when the DB already has initial data (leaving empty unit-test DBs untouched).
+    """
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM Doctors LIMIT 1")
+    if not cursor.fetchone():
+        return
+
+    departments = [
+        "General Medicine", "Cardiology", "Dermatology", "Neurology",
+        "Orthopedics", "ENT", "Ophthalmology", "Pediatrics",
+        "Gynecology", "Psychiatry", "Gastroenterology",
+    ]
+    doctor_data_by_hospital = {
+        2: {
+            "General Medicine": ["Dr. Deepti", "Dr. Rahul", "Dr. Sharma"],
+            "Cardiology":       ["Dr. Joshi", "Dr. Reddy"],
+            "Dermatology":      ["Dr. Kapoor", "Dr. Sneha"],
+            "Neurology":        ["Dr. Vivek", "Dr. Rao"],
+            "Orthopedics":      ["Dr. Thomas", "Dr. Roy"],
+            "ENT":              ["Dr. Ramesh", "Dr. George"],
+            "Ophthalmology":    ["Dr. Neha", "Dr. Khan"],
+            "Pediatrics":       ["Dr. Ritu", "Dr. Das"],
+            "Gynecology":       ["Dr. Swathi", "Dr. Fernandes"],
+            "Psychiatry":       ["Dr. Sonia", "Dr. Nikhil"],
+        },
+        3: {
+            "General Medicine": ["Dr. Vikram", "Dr. Sunita", "Dr. Sharma"],
+            "Cardiology":       ["Dr. Malhotra", "Dr. Hegde"],
+            "Dermatology":      ["Dr. Chawla", "Dr. Divya"],
+            "Neurology":        ["Dr. Kulkarni", "Dr. Shetty"],
+            "Orthopedics":      ["Dr. Chauhan", "Dr. Nambiar"],
+            "ENT":              ["Dr. Deshmukh", "Dr. Pai"],
+            "Ophthalmology":    ["Dr. Chatterjee", "Dr. Gowda"],
+            "Pediatrics":       ["Dr. Banerjee", "Dr. Kamath"],
+            "Gynecology":       ["Dr. Srinivasan", "Dr. Shenoy"],
+            "Psychiatry":       ["Dr. Gokhale", "Dr. Bhat"],
+        },
+    }
+
+    today = date.today()
+    times = ["09:00", "10:00", "11:00", "12:00", "14:00", "15:00", "16:00", "17:00"]
+
+    for h_id, doc_map in doctor_data_by_hospital.items():
+        cursor.execute(
+            _adapt_sql("SELECT 1 FROM Doctors WHERE hospital_id = ? LIMIT 1"),
+            _adapt_params([h_id]),
+        )
+        if cursor.fetchone():
+            continue
+
+        for d in departments:
+            cursor.execute(
+                _adapt_sql("INSERT INTO Departments (name, hospital_id) VALUES (?, ?)"),
+                _adapt_params([d, h_id]),
+            )
+        conn.commit()
+
+        cursor.execute(
+            _adapt_sql("SELECT id, name FROM Departments WHERE hospital_id = ?"),
+            _adapt_params([h_id]),
+        )
+        dept_ids = {r["name"]: r["id"] for r in cursor.fetchall()}
+
+        new_doc_ids = []
+        for dept, docs in doc_map.items():
+            d_id = dept_ids.get(dept)
+            if not d_id:
+                continue
+            for doc in docs:
+                if _USE_POSTGRES:
+                    cursor.execute(
+                        "INSERT INTO Doctors (name, department_id, hospital_id) VALUES (%s, %s, %s) RETURNING id",
+                        (doc, d_id, h_id),
+                    )
+                    new_doc_ids.append(cursor.fetchone()["id"])
+                else:
+                    cursor.execute(
+                        "INSERT INTO Doctors (name, department_id, hospital_id) VALUES (?, ?, ?)",
+                        (doc, d_id, h_id),
+                    )
+                    new_doc_ids.append(cursor.lastrowid)
+        conn.commit()
+
+        slot_rows = []
+        for doc_id in new_doc_ids:
+            for day_offset in range(7):
+                d_date = (today + timedelta(days=day_offset)).isoformat()
+                for t in times:
+                    slot_rows.append((doc_id, d_date, t, False if _USE_POSTGRES else 0))
+
+        if _USE_POSTGRES:
+            from psycopg2.extras import execute_batch
+            execute_batch(
+                cursor,
+                "INSERT INTO Slots (doctor_id, slot_date, slot_time, is_booked) VALUES (%s, %s, %s, %s)",
+                slot_rows,
+                page_size=500,
+            )
+        else:
+            cursor.executemany(
+                "INSERT INTO Slots (doctor_id, slot_date, slot_time, is_booked) VALUES (?, ?, ?, ?)",
+                slot_rows,
+            )
+        conn.commit()
+        logger.info("Auto-seeded %d doctors and %d slots for hospital_id=%d", len(new_doc_ids), len(slot_rows), h_id)
 
 
 def _seed_symptom_mappings(conn) -> None:

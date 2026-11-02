@@ -16,7 +16,7 @@ from psycopg2.extras import execute_values
 
 # Parents first so foreign keys are satisfied.
 TABLES = [
-    "Departments", "Doctors", "Patients", "Slots", "Appointments",
+    "Hospitals", "Departments", "Doctors", "Patients", "Slots", "Appointments",
     "Calls", "Conversations", "AI_Logs", "Feedback", "SymptomMappings",
 ]
 
