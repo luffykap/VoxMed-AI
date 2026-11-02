@@ -300,31 +300,31 @@ async def _call_with_failover(
             logger.debug("Skipping provider %s -- currently on cooldown", name)
             continue
 
-        logger.info("Trying provider %s (model=%s)", name, provider_cfg.get("model"))
+        logger.debug("Trying provider %s (model=%s)", name, provider_cfg.get("model"))
 
         try:
             result = await _call_provider(name, provider_cfg, messages, json_mode, max_tokens)
             # An empty response is useless for both prose and JSON — try the next provider
             if not result.strip():
-                logger.warning(
+                logger.debug(
                     "Provider %s returned empty response -- trying next", name
                 )
                 last_exc = RuntimeError(f"{name} returned empty response")
                 continue
-            logger.info("LLM provider %s succeeded", name)
+            logger.debug("LLM provider %s succeeded", name)
             _provider_cooldowns.pop(name, None)
             return result
 
         except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as exc:
             # If rate limited, apply cooldown
             if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
-                logger.warning(
+                logger.debug(
                     "Provider %s rate-limited (429) -- placing on %ds cooldown",
                     name, COOLDOWN_SECONDS
                 )
                 _provider_cooldowns[name] = time.time() + COOLDOWN_SECONDS
             else:
-                logger.warning(
+                logger.debug(
                     "Provider %s failed (%s: %s) -- trying next",
                     name, type(exc).__name__, exc,
                 )
