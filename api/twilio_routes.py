@@ -80,7 +80,13 @@ async def twilio_incoming(request: Request):
     form_data = await request.form()
     call_sid = form_data.get("CallSid", "")
     
+    emergency_prompt = (
+        "Welcome to VoxMed AI. If this is a medical emergency, press 0 to connect "
+        "directly with our human receptionist. Otherwise, please stay on the line to "
+        "select your preferred language."
+    )
     logger.info("Incoming Twilio call | CallSid=%s", call_sid)
+    logger.info("Greeting (Emergency Option) | CallSid=%s | Prompt=%r", call_sid, emergency_prompt)
 
     response = VoiceResponse()
     
@@ -90,10 +96,7 @@ async def twilio_incoming(request: Request):
         method="POST",
         timeout=3
     )
-    gather_emergency.say(
-        "Welcome to VoxMed AI. If this is a medical emergency, press 0 to connect directly with our human receptionist. Otherwise, please stay on the line to select your preferred language.",
-        language="en-IN"
-    )
+    gather_emergency.say(emergency_prompt, language="en-IN")
     response.append(gather_emergency)
     
     # Fallback if the user doesn't press anything in the emergency gather
@@ -104,6 +107,11 @@ async def twilio_incoming(request: Request):
 @router.post("/twilio/language_menu")
 async def twilio_language_menu(request: Request):
     """Webhook for language selection (after emergency check)."""
+    form_data = await request.form()
+    call_sid = form_data.get("CallSid", "")
+    lang_prompt = _PHRASES['en']['greeting_suffix']
+    logger.info("Language Menu | CallSid=%s | Prompt=%r", call_sid, lang_prompt)
+
     response = VoiceResponse()
     
     gather_lang = Gather(
@@ -112,7 +120,7 @@ async def twilio_language_menu(request: Request):
         method="POST",
         timeout=5
     )
-    gather_lang.say(f"{_PHRASES['en']['greeting_suffix']}", language="en-IN")
+    gather_lang.say(f"{lang_prompt}", language="en-IN")
     response.append(gather_lang)
     
     # Fallback if the user doesn't press anything in the language menu
@@ -223,7 +231,9 @@ async def twilio_language_selected(request: Request):
         speechTimeout="auto",
         language=twilio_lang,
     )
-    gather_hosp.say(_build_hospital_prompt(lang_code), language=twilio_lang)
+    hosp_prompt = _build_hospital_prompt(lang_code)
+    logger.info("Hospital Menu | CallSid=%s | Prompt=%r", call_sid, hosp_prompt)
+    gather_hosp.say(hosp_prompt, language=twilio_lang)
     response.append(gather_hosp)
 
     # Fallback if caller stays silent: default to Hospital 1
@@ -267,6 +277,7 @@ async def twilio_hospital_selected(request: Request):
     active_calls[call_sid] = dm
 
     greeting = dm.get_greeting(lang_code=lang_code)
+    logger.info("Hospital Greeting | CallSid=%s | Reply=%r", call_sid, greeting)
     twiml = get_twiml_response(greeting, dm.is_finished, lang_code=lang_code)
     return HTMLResponse(content=twiml, media_type="application/xml")
 
@@ -305,6 +316,7 @@ async def twilio_process(request: Request):
         return HTMLResponse(content=twiml, media_type="application/xml")
 
     reply_text = await dm.process(speech_result)
+    logger.info("AI Reply | CallSid=%s | Reply=%r", call_sid, reply_text)
         
     twiml = get_twiml_response(reply_text, dm.is_finished, lang_code=lang_code)
     
