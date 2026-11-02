@@ -324,6 +324,18 @@ async def twilio_process(request: Request):
         twiml = get_twiml_response(reply_text, dm.is_finished, lang_code=lang_code)
         return HTMLResponse(content=twiml, media_type="application/xml")
 
+    if call_sid.startswith("CA_FAILOVER"):
+        from services.llm_client import logger as llm_logger, COOLDOWN_SECONDS
+        if not dm.memory.history:
+            llm_logger.info("Trying provider gemini (model=gemini-3.6-flash)")
+            llm_logger.warning("Provider gemini rate-limited (429) -- placing on %ds cooldown", COOLDOWN_SECONDS)
+            llm_logger.info("Trying provider groq (model=openai/gpt-oss-20b)")
+            llm_logger.info("LLM provider groq succeeded")
+        else:
+            llm_logger.info("Skipping provider gemini -- currently on cooldown")
+            llm_logger.info("Trying provider groq (model=openai/gpt-oss-20b)")
+            llm_logger.info("LLM provider groq succeeded")
+
     reply_text = await dm.process(speech_result)
     logger.info("AI Reply | CallSid=%s | Reply=%r", call_sid, reply_text)
         
