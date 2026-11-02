@@ -22,7 +22,7 @@ class MockLLM:
         self.responses = responses
         self.idx = 0
 
-    def understand(self, memory, user_text: str, detect_intent: bool = False) -> dict:
+    async def understand(self, memory, user_text: str, detect_intent: bool = False) -> dict:
         if self.idx < len(self.responses):
             res = self.responses[self.idx]
             self.idx += 1
@@ -30,14 +30,14 @@ class MockLLM:
         # Safe fallback: return last intent with no new entities
         return {"intent": memory.intent or "book_appointment", "entities": {}}
 
-    def generate_reply(self, memory, backend_result, language) -> str:
+    async def generate_reply(self, memory, backend_result, language) -> str:
         if not backend_result:
             return "What else do you need?"
         if backend_result.get("success"):
             return backend_result.get("message", "Action successful.")
         return backend_result.get("message", "Something went wrong.")
 
-    def infer_department(self, symptoms: list) -> str:
+    async def infer_department(self, symptoms: list) -> str:
         return "General Medicine"
 
 
@@ -69,7 +69,8 @@ def _seed_slot(doctor_name: str = "Dr. Sharma", dept: str = "General Medicine",
 
 # ── Tests: booking flow ───────────────────────────────────────────────────────
 
-def test_greeting_contains_welcome():
+@pytest.mark.asyncio
+async def test_greeting_contains_welcome():
     orch = ConversationOrchestrator(language="English")
     with patch("processing.orchestrator.llm_client", MockLLM([])):
         greeting = orch.get_greeting()
@@ -77,7 +78,8 @@ def test_greeting_contains_welcome():
     assert not orch.is_finished
 
 
-def test_full_booking_flow_with_confirmation():
+@pytest.mark.asyncio
+async def test_full_booking_flow_with_confirmation():
     """
     Happy path:
       Turn 1: intent detected
@@ -107,24 +109,25 @@ def test_full_booking_flow_with_confirmation():
     orch = ConversationOrchestrator(language="English")
     with patch("processing.orchestrator.llm_client", MockLLM(mock_responses)):
         orch.get_greeting()
-        orch.process("I want to book an appointment")
-        orch.process("I have a fever")
-        orch.process(f"On {tomorrow}")
-        reply_time = orch.process("At 9 AM")
-        reply_name = orch.process("Kapil")
+        await orch.process("I want to book an appointment")
+        await orch.process("I have a fever")
+        await orch.process(f"On {tomorrow}")
+        reply_time = await orch.process("At 9 AM")
+        reply_name = await orch.process("Kapil")
 
         # After all entities collected, a confirmation prompt should appear
         assert "Shall I confirm" in reply_name or "confirm" in reply_name.lower()
         assert not orch.is_finished
 
         # User confirms
-        reply_final = orch.process("yes")
+        reply_final = await orch.process("yes")
 
     # Booking attempted — either booked or alternative offered
     assert orch.is_finished or "unavailable" in reply_final.lower() or "slot" in reply_final.lower()
 
 
-def test_confirmation_no_clears_date_and_asks_again():
+@pytest.mark.asyncio
+async def test_confirmation_no_clears_date_and_asks_again():
     """Saying 'no, change the date' should clear date/time and re-enter slot filling."""
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
     _seed_slot(slot_date=tomorrow)
@@ -142,12 +145,12 @@ def test_confirmation_no_clears_date_and_asks_again():
     orch = ConversationOrchestrator(language="English")
     with patch("processing.orchestrator.llm_client", MockLLM(mock_responses)):
         orch.get_greeting()
-        orch.process("book appointment")
-        orch.process("headache")
-        orch.process(tomorrow)
-        orch.process("9 AM")
-        orch.process("Ravi")             # all slots filled → confirmation prompt
-        reply_no = orch.process("no, change the date")  # should clear date and ask
+        await orch.process("book appointment")
+        await orch.process("headache")
+        await orch.process(tomorrow)
+        await orch.process("9 AM")
+        await orch.process("Ravi")             # all slots filled → confirmation prompt
+        reply_no = await orch.process("no, change the date")  # should clear date and ask
 
     assert not orch.is_finished
     # date slot should be cleared
@@ -155,7 +158,8 @@ def test_confirmation_no_clears_date_and_asks_again():
     assert "date" in reply_no.lower() or "prefer" in reply_no.lower()
 
 
-def test_abort_mid_flow_resets_state():
+@pytest.mark.asyncio
+async def test_abort_mid_flow_resets_state():
     """Saying 'cancel it' during slot filling should reset intent and entities."""
     mock_responses = [
         {"intent": "book_appointment", "confidence": 0.9, "entities": {}},
@@ -166,27 +170,29 @@ def test_abort_mid_flow_resets_state():
     orch = ConversationOrchestrator(language="English")
     with patch("processing.orchestrator.llm_client", MockLLM(mock_responses)):
         orch.get_greeting()
-        orch.process("I want to book")
-        orch.process("fever")
-        reply = orch.process("cancel it, never mind")
+        await orch.process("I want to book")
+        await orch.process("fever")
+        reply = await orch.process("cancel it, never mind")
 
     assert orch.memory.intent is None
     assert orch.memory.entities == {}
     assert "fresh" in reply.lower() or "start" in reply.lower() or "help" in reply.lower()
 
 
-def test_farewell_ends_conversation():
+@pytest.mark.asyncio
+async def test_farewell_ends_conversation():
     """Saying 'goodbye' should set is_finished = True."""
     orch = ConversationOrchestrator(language="English")
     with patch("processing.orchestrator.llm_client", MockLLM([])):
         orch.get_greeting()
-        orch.process("goodbye")
+        await orch.process("goodbye")
     assert orch.is_finished
 
 
 # ── Tests: cancel flow ────────────────────────────────────────────────────────
 
-def test_cancel_flow_collects_name_and_date():
+@pytest.mark.asyncio
+async def test_cancel_flow_collects_name_and_date():
     """Cancel intent requires patient_name and date before executing."""
     mock_responses = [
         {"intent": "cancel_appointment", "confidence": 0.9, "entities": {}},
@@ -196,12 +202,58 @@ def test_cancel_flow_collects_name_and_date():
     orch = ConversationOrchestrator(language="English")
     with patch("processing.orchestrator.llm_client", MockLLM(mock_responses)):
         orch.get_greeting()
-        r1 = orch.process("cancel my appointment")
+        r1 = await orch.process("cancel my appointment")
         assert not orch.is_finished
 
-        r2 = orch.process("Rahul")
+        r2 = await orch.process("Rahul")
         assert not orch.is_finished
 
-        r3 = orch.process(date.today().isoformat())
+        r3 = await orch.process(date.today().isoformat())
         # Cancel executed — finished (even if patient not found in empty DB)
         assert orch.is_finished or "couldn't find" in r3.lower()
+
+
+@pytest.mark.asyncio
+async def test_multi_hospital_booking_and_resolution():
+    """Verify resolve_hospital and hospital-scoped booking in ConversationOrchestrator."""
+    from database import resolve_hospital
+
+    assert resolve_hospital("1")["name"] == "Apollo Hospital"
+    assert resolve_hospital("2")["name"] == "Manipal Hospital"
+    assert resolve_hospital("Fortis")["name"] == "Fortis Hospital"
+    assert resolve_hospital("मणिपाल")["name"] == "Manipal Hospital"
+
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    conn = get_connection()
+    cursor = conn.cursor()
+    # Seed a doctor & slot specifically in Hospital 2 (Manipal Hospital)
+    cursor.execute("INSERT OR IGNORE INTO Departments (name, hospital_id) VALUES ('Cardiology', 2)")
+    dept_id = cursor.execute(
+        "SELECT id FROM Departments WHERE name = 'Cardiology' AND hospital_id = 2"
+    ).fetchone()["id"]
+    cursor.execute(
+        "INSERT INTO Doctors (name, department_id, hospital_id) VALUES ('Dr. Reddy', ?, 2)",
+        (dept_id,),
+    )
+    doc_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO Slots (doctor_id, slot_date, slot_time, is_booked) VALUES (?, ?, '10:00', 0)",
+        (doc_id, tomorrow),
+    )
+    conn.commit()
+    conn.close()
+
+    mock_responses = [
+        {"intent": "book_appointment", "confidence": 0.95, "entities": {"department": "Cardiology", "date": tomorrow, "time": "10:00", "patient_name": "Ananya"}},
+    ]
+
+    orch = ConversationOrchestrator(language="English", hospital_id=2)
+    with patch("processing.orchestrator.llm_client", MockLLM(mock_responses)):
+        greeting = orch.get_greeting()
+        assert "Manipal Hospital" in greeting
+        confirm_prompt = await orch.process(f"Book Cardiology tomorrow at 10 AM for Ananya")
+        assert "Manipal Hospital" in confirm_prompt
+        final_reply = await orch.process("yes")
+        assert orch.is_finished
+        assert "Manipal Hospital" in final_reply
+        assert "Dr. Reddy" in final_reply

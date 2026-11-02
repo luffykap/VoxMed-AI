@@ -234,7 +234,7 @@ async def gather_speech(
         return Response(content=twiml, media_type="application/xml")
 
     # Run the full orchestrator pipeline with the transcribed text
-    ai_response = orchestrator.process(SpeechResult.strip())
+    ai_response = await orchestrator.process(SpeechResult.strip())
     is_finished = orchestrator.is_finished
 
     if is_finished:

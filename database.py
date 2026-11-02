@@ -158,6 +158,8 @@ def _ensure_schema(conn) -> None:
     Runs once per process (guarded by _schema_ensured).
     """
     _create_tables_if_missing(conn)
+    _migrate_multi_hospital(conn)
+    _seed_default_hospitals(conn)
 
     # Seed SymptomMappings if the table was just empty
     cursor = conn.cursor()
@@ -178,10 +180,23 @@ def _create_tables_if_missing(conn) -> None:
     if _USE_POSTGRES:
         statements = [
             """
+            CREATE TABLE IF NOT EXISTS Hospitals (
+                id            SERIAL PRIMARY KEY,
+                name          TEXT NOT NULL UNIQUE,
+                city          TEXT DEFAULT 'Bengaluru',
+                address       TEXT,
+                phone         TEXT,
+                opening_hours TEXT DEFAULT 'Monday to Saturday, 9 AM to 8 PM',
+                created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
             CREATE TABLE IF NOT EXISTS Departments (
-                id         SERIAL PRIMARY KEY,
-                name       TEXT NOT NULL UNIQUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id          SERIAL PRIMARY KEY,
+                name        TEXT NOT NULL,
+                hospital_id INTEGER NOT NULL DEFAULT 1 REFERENCES Hospitals(id),
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (hospital_id, name)
             )
             """,
             """
@@ -189,6 +204,7 @@ def _create_tables_if_missing(conn) -> None:
                 id            SERIAL PRIMARY KEY,
                 name          TEXT NOT NULL,
                 department_id INTEGER NOT NULL REFERENCES Departments(id),
+                hospital_id   INTEGER NOT NULL DEFAULT 1 REFERENCES Hospitals(id),
                 created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """,
@@ -212,21 +228,23 @@ def _create_tables_if_missing(conn) -> None:
             """,
             """
             CREATE TABLE IF NOT EXISTS Appointments (
-                id         SERIAL PRIMARY KEY,
-                patient_id INTEGER NOT NULL REFERENCES Patients(id),
-                doctor_id  INTEGER NOT NULL REFERENCES Doctors(id),
-                slot_id    INTEGER NOT NULL REFERENCES Slots(id),
-                status     TEXT NOT NULL DEFAULT 'BOOKED',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id          SERIAL PRIMARY KEY,
+                patient_id  INTEGER NOT NULL REFERENCES Patients(id),
+                doctor_id   INTEGER NOT NULL REFERENCES Doctors(id),
+                slot_id     INTEGER NOT NULL REFERENCES Slots(id),
+                hospital_id INTEGER NOT NULL DEFAULT 1 REFERENCES Hospitals(id),
+                status      TEXT NOT NULL DEFAULT 'BOOKED',
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """,
             """
             CREATE TABLE IF NOT EXISTS Calls (
-                id         SERIAL PRIMARY KEY,
-                patient_id INTEGER REFERENCES Patients(id),
-                start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                end_time   TIMESTAMP,
-                status     TEXT NOT NULL DEFAULT 'ONGOING'
+                id          SERIAL PRIMARY KEY,
+                patient_id  INTEGER REFERENCES Patients(id),
+                hospital_id INTEGER DEFAULT 1 REFERENCES Hospitals(id),
+                start_time  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                end_time    TIMESTAMP,
+                status      TEXT NOT NULL DEFAULT 'ONGOING'
             )
             """,
             """
@@ -270,17 +288,31 @@ def _create_tables_if_missing(conn) -> None:
     else:
         # SQLite: use executescript (not available in psycopg2)
         conn.executescript("""
-            CREATE TABLE IF NOT EXISTS Departments (
+            CREATE TABLE IF NOT EXISTS Hospitals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
+                city TEXT DEFAULT 'Bengaluru',
+                address TEXT,
+                phone TEXT,
+                opening_hours TEXT DEFAULT 'Monday to Saturday, 9 AM to 8 PM',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS Departments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                hospital_id INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (hospital_id) REFERENCES Hospitals (id),
+                UNIQUE (hospital_id, name)
             );
             CREATE TABLE IF NOT EXISTS Doctors (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 department_id INTEGER NOT NULL,
+                hospital_id INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (department_id) REFERENCES Departments (id)
+                FOREIGN KEY (department_id) REFERENCES Departments (id),
+                FOREIGN KEY (hospital_id) REFERENCES Hospitals (id)
             );
             CREATE TABLE IF NOT EXISTS Patients (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -302,19 +334,23 @@ def _create_tables_if_missing(conn) -> None:
                 patient_id INTEGER NOT NULL,
                 doctor_id INTEGER NOT NULL,
                 slot_id INTEGER NOT NULL,
+                hospital_id INTEGER NOT NULL DEFAULT 1,
                 status TEXT NOT NULL DEFAULT 'BOOKED',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (patient_id) REFERENCES Patients (id),
                 FOREIGN KEY (doctor_id) REFERENCES Doctors (id),
-                FOREIGN KEY (slot_id) REFERENCES Slots (id)
+                FOREIGN KEY (slot_id) REFERENCES Slots (id),
+                FOREIGN KEY (hospital_id) REFERENCES Hospitals (id)
             );
             CREATE TABLE IF NOT EXISTS Calls (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 patient_id INTEGER,
+                hospital_id INTEGER DEFAULT 1,
                 start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 end_time TIMESTAMP,
                 status TEXT NOT NULL DEFAULT 'ONGOING',
-                FOREIGN KEY (patient_id) REFERENCES Patients (id)
+                FOREIGN KEY (patient_id) REFERENCES Patients (id),
+                FOREIGN KEY (hospital_id) REFERENCES Hospitals (id)
             );
             CREATE TABLE IF NOT EXISTS Conversations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -350,6 +386,58 @@ def _create_tables_if_missing(conn) -> None:
     conn.commit()
     logger.info("Schema ensured (CREATE IF NOT EXISTS) | backend=%s",
                 "postgresql" if _USE_POSTGRES else "sqlite")
+
+
+DEFAULT_HOSPITALS = [
+    ("Apollo Hospital", "Bengaluru", "154/11, Bannerghatta Road", "+918026304050", "Monday to Saturday, 8 AM to 9 PM"),
+    ("Manipal Hospital", "Bengaluru", "98, HAL Old Airport Road", "+918025024444", "Monday to Sunday, 9 AM to 8 PM"),
+    ("Fortis Hospital", "Bengaluru", "14, Cunningham Road", "+918041994444", "Monday to Saturday, 9 AM to 7 PM"),
+]
+
+
+def _migrate_multi_hospital(conn) -> None:
+    """Safely add hospital_id columns to existing tables if migrating an older DB."""
+    cursor = conn.cursor()
+    tables_with_hospital = ["Departments", "Doctors", "Appointments", "Calls"]
+    for table in tables_with_hospital:
+        try:
+            if _USE_POSTGRES:
+                cursor.execute(
+                    f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS hospital_id INTEGER DEFAULT 1"
+                )
+            else:
+                cursor.execute(f"PRAGMA table_info({table})")
+                cols = [r["name"] for r in cursor.fetchall()]
+                if "hospital_id" not in cols:
+                    cursor.execute(
+                        f"ALTER TABLE {table} ADD COLUMN hospital_id INTEGER DEFAULT 1"
+                    )
+        except Exception as exc:
+            logger.debug("Migration check for %s: %s", table, exc)
+    conn.commit()
+
+
+def _seed_default_hospitals(conn) -> None:
+    """Ensure the default hospitals exist so hospital_id=1 foreign keys are always valid."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM Hospitals LIMIT 1")
+    if cursor.fetchone():
+        return
+    for name, city, address, phone, hours in DEFAULT_HOSPITALS:
+        if _USE_POSTGRES:
+            cursor.execute(
+                "INSERT INTO Hospitals (name, city, address, phone, opening_hours) "
+                "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (name) DO NOTHING",
+                (name, city, address, phone, hours),
+            )
+        else:
+            cursor.execute(
+                "INSERT OR IGNORE INTO Hospitals (name, city, address, phone, opening_hours) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (name, city, address, phone, hours),
+            )
+    conn.commit()
+    logger.info("Seeded %d default hospitals", len(DEFAULT_HOSPITALS))
 
 
 def _seed_symptom_mappings(conn) -> None:
@@ -452,6 +540,7 @@ def init_db():
     tables = [
         "Feedback", "AI_Logs", "Conversations", "Calls",
         "Appointments", "Slots", "Doctors", "Departments", "Patients", "SymptomMappings",
+        "Hospitals",
     ]
 
     if _USE_POSTGRES:
@@ -468,6 +557,7 @@ def init_db():
     _schema_ensured = False
 
     _create_tables_if_missing(conn)
+    _seed_default_hospitals(conn)
     logger.info("Database schema initialized (destructive path).")
 
     _inject_dummy_data(conn)
@@ -483,51 +573,93 @@ def _inject_dummy_data(conn):
 
     cursor = conn.cursor()
 
-    # 1. Departments
+    # 0. Hospitals
+    _seed_default_hospitals(conn)
+    cursor.execute("SELECT id, name FROM Hospitals ORDER BY id")
+    hospitals = [dict(r) for r in cursor.fetchall()]
+
+    # 1. Departments per hospital
     departments = [
         "General Medicine", "Cardiology", "Dermatology", "Neurology",
         "Orthopedics", "ENT", "Ophthalmology", "Pediatrics",
         "Gynecology", "Psychiatry", "Gastroenterology",
     ]
-    for d in departments:
-        cursor.execute(_adapt_sql("INSERT INTO Departments (name) VALUES (?)"), _adapt_params([d]))
-    conn.commit()
-
-    cursor.execute("SELECT id, name FROM Departments")
-    dept_ids = {row["name"]: row["id"] for row in cursor.fetchall()}
-
-    # 2. Doctors
-    doctor_data = {
-        "General Medicine": ["Dr. Sharma", "Dr. Meera", "Dr. Deepti", "Dr. Rahul", "Dr. Nair"],
-        "Cardiology":       ["Dr. Gupta", "Dr. Patel", "Dr. Joshi", "Dr. Reddy"],
-        "Dermatology":      ["Dr. Priya", "Dr. Arjun", "Dr. Kapoor", "Dr. Sneha"],
-        "Neurology":        ["Dr. Verma", "Dr. Ananya", "Dr. Vivek", "Dr. Rao"],
-        "Orthopedics":      ["Dr. Singh", "Dr. Kiran", "Dr. Thomas", "Dr. Roy"],
-        "ENT":              ["Dr. Bose", "Dr. Ahmed", "Dr. Ramesh", "Dr. George"],
-        "Ophthalmology":    ["Dr. Iyer", "Dr. Joseph", "Dr. Neha", "Dr. Khan"],
-        "Pediatrics":       ["Dr. Anita", "Dr. Kavya", "Dr. Ritu", "Dr. Das"],
-        "Gynecology":       ["Dr. Pooja", "Dr. Lakshmi", "Dr. Swathi", "Dr. Fernandes"],
-        "Psychiatry":       ["Dr. Menon", "Dr. Harish", "Dr. Sonia", "Dr. Nikhil"],
-    }
-    for dept, doctors in doctor_data.items():
-        for doc in doctors:
+    for h in hospitals:
+        for d in departments:
             cursor.execute(
-                _adapt_sql("INSERT INTO Doctors (name, department_id) VALUES (?, ?)"),
-                _adapt_params([doc, dept_ids[dept]]),
+                _adapt_sql("INSERT INTO Departments (name, hospital_id) VALUES (?, ?)"),
+                _adapt_params([d, h["id"]]),
             )
     conn.commit()
 
-    cursor.execute("SELECT id FROM Doctors")
-    doc_id_list = [row["id"] for row in cursor.fetchall()]
+    cursor.execute("SELECT id, name, hospital_id FROM Departments")
+    dept_ids = {(row["hospital_id"], row["name"]): row["id"] for row in cursor.fetchall()}
+
+    # 2. Doctors per hospital (Hospital 1 gets primary list; Hospitals 2 & 3 get distinct + shared doctors)
+    doctor_data_by_hospital = {
+        1: {
+            "General Medicine": ["Dr. Sharma", "Dr. Meera", "Dr. Nair"],
+            "Cardiology":       ["Dr. Gupta", "Dr. Patel"],
+            "Dermatology":      ["Dr. Priya", "Dr. Arjun"],
+            "Neurology":        ["Dr. Verma", "Dr. Ananya"],
+            "Orthopedics":      ["Dr. Singh", "Dr. Kiran"],
+            "ENT":              ["Dr. Bose", "Dr. Ahmed"],
+            "Ophthalmology":    ["Dr. Iyer", "Dr. Joseph"],
+            "Pediatrics":       ["Dr. Anita", "Dr. Kavya"],
+            "Gynecology":       ["Dr. Pooja", "Dr. Lakshmi"],
+            "Psychiatry":       ["Dr. Menon", "Dr. Harish"],
+        },
+        2: {
+            "General Medicine": ["Dr. Deepti", "Dr. Rahul", "Dr. Sharma"],
+            "Cardiology":       ["Dr. Joshi", "Dr. Reddy"],
+            "Dermatology":      ["Dr. Kapoor", "Dr. Sneha"],
+            "Neurology":        ["Dr. Vivek", "Dr. Rao"],
+            "Orthopedics":      ["Dr. Thomas", "Dr. Roy"],
+            "ENT":              ["Dr. Ramesh", "Dr. George"],
+            "Ophthalmology":    ["Dr. Neha", "Dr. Khan"],
+            "Pediatrics":       ["Dr. Ritu", "Dr. Das"],
+            "Gynecology":       ["Dr. Swathi", "Dr. Fernandes"],
+            "Psychiatry":       ["Dr. Sonia", "Dr. Nikhil"],
+        },
+        3: {
+            "General Medicine": ["Dr. Vikram", "Dr. Sunita", "Dr. Sharma"],
+            "Cardiology":       ["Dr. Malhotra", "Dr. Hegde"],
+            "Dermatology":      ["Dr. Chawla", "Dr. Divya"],
+            "Neurology":        ["Dr. Kulkarni", "Dr. Shetty"],
+            "Orthopedics":      ["Dr. Chauhan", "Dr. Nambiar"],
+            "ENT":              ["Dr. Deshmukh", "Dr. Pai"],
+            "Ophthalmology":    ["Dr. Chatterjee", "Dr.gowda"],
+            "Pediatrics":       ["Dr. Banerjee", "Dr. Kamath"],
+            "Gynecology":       ["Dr. Srinivasan", "Dr. Shenoy"],
+            "Psychiatry":       ["Dr. Gokhale", "Dr. Bhat"],
+        },
+    }
+    for h in hospitals:
+        h_id = h["id"]
+        doc_map = doctor_data_by_hospital.get(h_id, doctor_data_by_hospital[1])
+        for dept, doctors in doc_map.items():
+            d_id = dept_ids.get((h_id, dept))
+            if not d_id:
+                continue
+            for doc in doctors:
+                cursor.execute(
+                    _adapt_sql("INSERT INTO Doctors (name, department_id, hospital_id) VALUES (?, ?, ?)"),
+                    _adapt_params([doc, d_id, h_id]),
+                )
+    conn.commit()
+
+    cursor.execute("SELECT id, hospital_id FROM Doctors")
+    doc_rows = [dict(row) for row in cursor.fetchall()]
 
     # 3. Slots
     today = date.today()
     times = ["09:00", "10:00", "11:00", "12:00", "14:00", "15:00", "16:00", "17:00"]
-    for doc_id in doc_id_list:
-        for day_offset in range(30):
+    for doc_row in doc_rows:
+        doc_id = doc_row["id"]
+        for day_offset in range(14):
             d_date = (today + timedelta(days=day_offset)).isoformat()
             for t in times:
-                is_booked = True if random.random() < 0.3 else False
+                is_booked = True if random.random() < 0.25 else False
                 cursor.execute(
                     _adapt_sql(
                         "INSERT INTO Slots (doctor_id, slot_date, slot_time, is_booked) VALUES (?, ?, ?, ?)"
@@ -556,7 +688,11 @@ def _inject_dummy_data(conn):
 
     # 5. Appointments
     cursor.execute(
-        _adapt_sql("SELECT id, doctor_id FROM Slots WHERE is_booked = ?"),
+        _adapt_sql(
+            "SELECT s.id, s.doctor_id, d.hospital_id "
+            "FROM Slots s JOIN Doctors d ON s.doctor_id = d.id "
+            "WHERE s.is_booked = ?"
+        ),
         _adapt_params([True if _USE_POSTGRES else 1]),
     )
     booked_slots = cursor.fetchall()
@@ -567,18 +703,21 @@ def _inject_dummy_data(conn):
         status = random.choice(statuses)
         cursor.execute(
             _adapt_sql(
-                "INSERT INTO Appointments (patient_id, doctor_id, slot_id, status) VALUES (?, ?, ?, ?)"
+                "INSERT INTO Appointments (patient_id, doctor_id, slot_id, hospital_id, status) "
+                "VALUES (?, ?, ?, ?, ?)"
             ),
-            _adapt_params([p_id, slot["doctor_id"], slot["id"], status]),
+            _adapt_params([p_id, slot["doctor_id"], slot["id"], slot["hospital_id"], status]),
         )
     conn.commit()
 
     # 6. Calls
+    hospital_ids = [h["id"] for h in hospitals]
     for _ in range(30):
         p_id = random.choice(patient_ids)
+        h_id = random.choice(hospital_ids)
         cursor.execute(
-            _adapt_sql("INSERT INTO Calls (patient_id, status) VALUES (?, ?)"),
-            _adapt_params([p_id, "COMPLETED"]),
+            _adapt_sql("INSERT INTO Calls (patient_id, hospital_id, status) VALUES (?, ?, ?)"),
+            _adapt_params([p_id, h_id, "COMPLETED"]),
         )
     conn.commit()
 
@@ -651,22 +790,140 @@ if __name__ == "__main__":
     init_db()
 
 
+# ── Hospital helpers ──────────────────────────────────────────────────────────
+
+def get_all_hospitals() -> list[dict]:
+    """Return all hospitals ordered by ID."""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, city, address, phone, opening_hours FROM Hospitals ORDER BY id")
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return rows
+    except Exception:
+        logger.exception("get_all_hospitals failed")
+        return []
+
+
+def get_hospital_by_id(hospital_id: int | None) -> dict | None:
+    """Return a single hospital dict by ID (defaults to first hospital if not found)."""
+    hospitals = get_all_hospitals()
+    if not hospitals:
+        return None
+    if hospital_id is not None:
+        for h in hospitals:
+            if h["id"] == int(hospital_id):
+                return h
+    return hospitals[0]
+
+
+def resolve_hospital(query: str | int | None) -> dict | None:
+    """
+    Resolve a hospital from either:
+      - Keypad digit / 1-based index or ID (e.g. 1, "1", "2", "3")
+      - Spoken number word in English/Hindi/Kannada/Telugu ("one", "first", "ek", "ondu", "okati")
+      - Spoken hospital name or partial match (e.g. "Apollo", "Manipal Hospital", "Fortis",
+        or even in native script like "अपोलो", "मणिपाल", "फोर्टिस")
+    Returns the matched hospital dict or None if no match.
+    """
+    if query is None:
+        return None
+
+    hospitals = get_all_hospitals()
+    if not hospitals:
+        return None
+
+    if isinstance(query, int):
+        for h in hospitals:
+            if h["id"] == query:
+                return h
+        if 1 <= query <= len(hospitals):
+            return hospitals[query - 1]
+        return None
+
+    raw = str(query).strip()
+    if not raw:
+        return None
+
+    # 1. Direct digit check ("1", "2", "3")
+    if raw.isdigit():
+        idx = int(raw)
+        if 1 <= idx <= len(hospitals):
+            return hospitals[idx - 1]
+        for h in hospitals:
+            if h["id"] == idx:
+                return h
+
+    lower = raw.lower()
+
+    # 2. Native script & transliterated hospital keyword match
+    native_keywords = {
+        "apollo": ["apollo", "apolo", "अपोलो", "ಅಪೋಲೋ", "ಅಪೊಲೊ", "అపోలో"],
+        "manipal": ["manipal", "मणिपाल", "मनिपाल", "ಮಣಿಪಾಲ್", "ಮಣಿಪಾಲ", "మణిపాల్"],
+        "fortis": ["fortis", "फोर्टिस", "ಫೋರ್ಟಿಸ್", "ఫోర్టిస్"],
+    }
+    for h in hospitals:
+        h_lower = h["name"].lower()
+        # Direct substring match
+        if h_lower in lower or lower in h_lower:
+            return h
+        # Match main brand word (e.g. "apollo" in "Apollo Hospital")
+        brand = h_lower.replace("hospital", "").replace("clinic", "").strip()
+        if brand and brand in lower:
+            return h
+        for key, variants in native_keywords.items():
+            if key in h_lower and any(v in lower for v in variants):
+                return h
+
+    # 3. Spoken number words ("press 1", "option two", "first", "ek", "do", "teen")
+    spoken_numbers = {
+        1: ["1", "one", "first", "ek", "एक", "ಒಂದು", "ఒకటి"],
+        2: ["2", "two", "second", "do", "दो", "ಎರಡು", "రెండు"],
+        3: ["3", "three", "third", "teen", "तीन", "ಮೂರು", "మూడు"],
+        4: ["4", "four", "fourth", "char", "चार", "ನಾಲ್ಕು", "నాలుగు"],
+    }
+    words = lower.replace(".", " ").replace(",", " ").split()
+    for idx, tokens in spoken_numbers.items():
+        if idx <= len(hospitals) and any(t in words for t in tokens):
+            return hospitals[idx - 1]
+
+    # 4. Fuzzy match against hospital names
+    import difflib
+    best_h = None
+    best_score = 0.0
+    clean_query = lower.replace("hospital", "").replace("clinic", "").strip()
+    for h in hospitals:
+        brand = h["name"].lower().replace("hospital", "").replace("clinic", "").strip()
+        score = difflib.SequenceMatcher(None, clean_query, brand).ratio()
+        if score > best_score and score > 0.55:
+            best_score = score
+            best_h = h
+    return best_h
+
+
 # ── Persistence helpers ───────────────────────────────────────────────────────
 
-def create_call() -> int | None:
+def create_call(hospital_id: int = 1) -> int | None:
     """Insert a new ONGOING call and return its id."""
     try:
         conn = get_connection()
         cursor = conn.cursor()
         if _USE_POSTGRES:
-            cursor.execute("INSERT INTO Calls (status) VALUES ('ONGOING') RETURNING id")
+            cursor.execute(
+                "INSERT INTO Calls (hospital_id, status) VALUES (%s, 'ONGOING') RETURNING id",
+                (hospital_id or 1,),
+            )
             call_id = cursor.fetchone()["id"]
         else:
-            cursor.execute("INSERT INTO Calls (status) VALUES ('ONGOING')")
+            cursor.execute(
+                "INSERT INTO Calls (hospital_id, status) VALUES (?, 'ONGOING')",
+                (hospital_id or 1,),
+            )
             call_id = cursor.lastrowid
         conn.commit()
         conn.close()
-        logger.info("Call created | call_id=%d", call_id)
+        logger.info("Call created | call_id=%d | hospital_id=%s", call_id, hospital_id)
         return call_id
     except Exception:
         logger.exception("create_call failed")
@@ -732,10 +989,13 @@ def save_ai_log(module: str, level: str, message: str) -> None:
 # ── Availability query helpers ────────────────────────────────────────────────
 
 def find_available_slot(
-    department: str, date: str | None = None, time: str | None = None
+    department: str,
+    date: str | None = None,
+    time: str | None = None,
+    hospital_id: int | None = None,
 ) -> dict | None:
     """
-    Find the first free slot for any doctor in the given department.
+    Find the first free slot for any doctor in the given department (and hospital).
     Optionally filter by date and/or time.
     Returns dict with keys: doctor_id, doctor_name, slot_id, slot_date, slot_time.
     Returns None if nothing is available.
@@ -745,7 +1005,6 @@ def find_available_slot(
         cursor = conn.cursor()
 
         if _USE_POSTGRES:
-            # PostgreSQL: case-insensitive comparison via ILIKE
             query = """
                 SELECT d.id AS doctor_id, d.name AS doctor_name,
                        s.id AS slot_id, s.slot_date, s.slot_time
@@ -756,6 +1015,9 @@ def find_available_slot(
                   AND s.is_booked = FALSE
             """
             params: list = [department]
+            if hospital_id:
+                query += " AND d.hospital_id = %s"
+                params.append(hospital_id)
             if date:
                 query += " AND s.slot_date = %s"
                 params.append(date)
@@ -775,6 +1037,9 @@ def find_available_slot(
                   AND s.is_booked = 0
             """
             params = [department]
+            if hospital_id:
+                query += " AND d.hospital_id = ?"
+                params.append(hospital_id)
             if date:
                 query += " AND s.slot_date = ?"
                 params.append(date)
@@ -853,7 +1118,7 @@ def find_nearest_slot(
         return None
 
 
-def find_doctor_slots(doctor_name: str, department: str) -> dict:
+def find_doctor_slots(doctor_name: str, department: str, hospital_id: int | None = None) -> dict:
     """
     Check whether a named doctor exists in the given department and return
     their available slots.
@@ -873,19 +1138,27 @@ def find_doctor_slots(doctor_name: str, department: str) -> dict:
         booked_val = False if _USE_POSTGRES else 0
 
         if _USE_POSTGRES:
-            cursor.execute(
+            query = (
                 "SELECT d.id, d.name, dept.name AS dept_name "
                 "FROM Doctors d JOIN Departments dept ON d.department_id = dept.id "
-                "WHERE d.name ILIKE %s",
-                (f"%{doctor_name}%",),
+                "WHERE d.name ILIKE %s"
             )
+            params: list = [f"%{doctor_name}%"]
+            if hospital_id:
+                query += " AND d.hospital_id = %s"
+                params.append(hospital_id)
+            cursor.execute(query, tuple(params))
         else:
-            cursor.execute(
+            query = (
                 "SELECT d.id, d.name, dept.name AS dept_name "
                 "FROM Doctors d JOIN Departments dept ON d.department_id = dept.id "
-                "WHERE d.name LIKE ? COLLATE NOCASE",
-                (f"%{doctor_name}%",),
+                "WHERE d.name LIKE ? COLLATE NOCASE"
             )
+            params = [f"%{doctor_name}%"]
+            if hospital_id:
+                query += " AND d.hospital_id = ?"
+                params.append(hospital_id)
+            cursor.execute(query, tuple(params))
 
         row = cursor.fetchone()
 
@@ -927,12 +1200,18 @@ def find_doctor_slots(doctor_name: str, department: str) -> dict:
         }
 
 
-def get_all_departments() -> list[str]:
-    """Return a list of all active departments."""
+def get_all_departments(hospital_id: int | None = None) -> list[str]:
+    """Return a list of all active departments (optionally filtered by hospital_id)."""
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT name FROM Departments ORDER BY name")
+        if hospital_id:
+            cursor.execute(
+                _adapt_sql("SELECT DISTINCT name FROM Departments WHERE hospital_id = ? ORDER BY name"),
+                _adapt_params([hospital_id]),
+            )
+        else:
+            cursor.execute("SELECT DISTINCT name FROM Departments ORDER BY name")
         rows = cursor.fetchall()
         conn.close()
         return [r["name"] for r in rows]
@@ -941,16 +1220,31 @@ def get_all_departments() -> list[str]:
         return []
 
 
-def get_all_doctors() -> list[dict]:
-    """Return a list of all active doctors with their departments."""
+def get_all_doctors(hospital_id: int | None = None) -> list[dict]:
+    """Return a list of all active doctors with their departments (optionally filtered by hospital_id)."""
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT d.name AS doctor_name, dept.name AS dept_name "
-            "FROM Doctors d JOIN Departments dept ON d.department_id = dept.id "
-            "ORDER BY dept_name, doctor_name"
-        )
+        if hospital_id:
+            cursor.execute(
+                _adapt_sql(
+                    "SELECT d.name AS doctor_name, dept.name AS dept_name, h.name AS hospital_name "
+                    "FROM Doctors d "
+                    "JOIN Departments dept ON d.department_id = dept.id "
+                    "LEFT JOIN Hospitals h ON d.hospital_id = h.id "
+                    "WHERE d.hospital_id = ? "
+                    "ORDER BY dept_name, doctor_name"
+                ),
+                _adapt_params([hospital_id]),
+            )
+        else:
+            cursor.execute(
+                "SELECT d.name AS doctor_name, dept.name AS dept_name, h.name AS hospital_name "
+                "FROM Doctors d "
+                "JOIN Departments dept ON d.department_id = dept.id "
+                "LEFT JOIN Hospitals h ON d.hospital_id = h.id "
+                "ORDER BY dept_name, doctor_name"
+            )
         rows = cursor.fetchall()
         conn.close()
         return [dict(r) for r in rows]

@@ -115,13 +115,19 @@ async def _map_symptoms_to_department(symptoms: list[str] | None) -> str | None:
     finally:
         conn.close()
 
-def _get_doctor_id(doctor_name: str, cursor) -> Optional[int]:
-    """Find doctor ID. Uses fuzzy matching to handle STT spelling errors."""
+def _get_doctor_id(doctor_name: str, cursor, hospital_id: Optional[int] = None) -> Optional[int]:
+    """Find doctor ID (optionally scoped to a hospital). Uses fuzzy matching to handle STT spelling errors."""
     if not doctor_name:
         return None
 
     import difflib
-    cursor.execute(_adapt_sql("SELECT id, name FROM Doctors"))
+    if hospital_id:
+        cursor.execute(
+            _adapt_sql("SELECT id, name FROM Doctors WHERE hospital_id = ?"),
+            _adapt_params([hospital_id]),
+        )
+    else:
+        cursor.execute(_adapt_sql("SELECT id, name FROM Doctors"))
     doctors = cursor.fetchall()
 
     req = doctor_name.lower().replace("dr.", "").replace("dr ", "").strip()
@@ -183,7 +189,15 @@ def _claim_slot(cursor, slot_id: int) -> bool:
     return cursor.rowcount == 1
 
 
-async def book_appointment(name: str, doctor: str, department: str, symptoms: list[str], date: str, time: str) -> tuple[bool, str, dict]:
+async def book_appointment(
+    name: str,
+    doctor: str,
+    department: str,
+    symptoms: list[str],
+    date: str,
+    time: str,
+    hospital_id: Optional[int] = None,
+) -> tuple[bool, str, dict]:
     err = _slot_request_error(date, time)
     if err:
         return False, err, {}
@@ -193,7 +207,7 @@ async def book_appointment(name: str, doctor: str, department: str, symptoms: li
     try:
         cursor = conn.cursor()
 
-        doctor_id = _get_doctor_id(doctor, cursor)
+        doctor_id = _get_doctor_id(doctor, cursor, hospital_id=hospital_id)
         resolved_dept = department
 
         if not doctor_id:
@@ -202,13 +216,25 @@ async def book_appointment(name: str, doctor: str, department: str, symptoms: li
                 resolved_dept = await _map_symptoms_to_department(symptoms) or "General Medicine"
 
             if _USE_POSTGRES:
-                cursor.execute(
-                    "SELECT id FROM Departments WHERE lower(name) = lower(%s)", (resolved_dept,)
-                )
+                if hospital_id:
+                    cursor.execute(
+                        "SELECT id FROM Departments WHERE lower(name) = lower(%s) AND hospital_id = %s",
+                        (resolved_dept, hospital_id),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT id FROM Departments WHERE lower(name) = lower(%s)", (resolved_dept,)
+                    )
             else:
-                cursor.execute(
-                    "SELECT id FROM Departments WHERE name = ? COLLATE NOCASE", (resolved_dept,)
-                )
+                if hospital_id:
+                    cursor.execute(
+                        "SELECT id FROM Departments WHERE name = ? COLLATE NOCASE AND hospital_id = ?",
+                        (resolved_dept, hospital_id),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT id FROM Departments WHERE name = ? COLLATE NOCASE", (resolved_dept,)
+                    )
             dept_row = cursor.fetchone()
 
             if dept_row:
@@ -230,9 +256,15 @@ async def book_appointment(name: str, doctor: str, department: str, symptoms: li
         if not doctor_id:
             return False, f"Sorry, there are no doctors available in {resolved_dept or 'General Medicine'} on {date} at {time}.", {}
 
-        # Get doctor name for the response
-        cursor.execute(_adapt_sql("SELECT name FROM Doctors WHERE id = ?"), _adapt_params([doctor_id]))
-        final_doctor_name = cursor.fetchone()["name"]
+        # Get doctor name and hospital_id for the response
+        cursor.execute(
+            _adapt_sql("SELECT d.name, d.hospital_id, h.name AS hospital_name FROM Doctors d LEFT JOIN Hospitals h ON d.hospital_id = h.id WHERE d.id = ?"),
+            _adapt_params([doctor_id]),
+        )
+        doc_row = cursor.fetchone()
+        final_doctor_name = doc_row["name"]
+        final_hospital_id = doc_row["hospital_id"] or hospital_id or 1
+        final_hospital_name = doc_row["hospital_name"]
 
         # Find the specific slot
         cursor.execute(
@@ -251,9 +283,9 @@ async def book_appointment(name: str, doctor: str, department: str, symptoms: li
 
         cursor.execute(
             _adapt_sql(
-                "INSERT INTO Appointments (patient_id, doctor_id, slot_id, status) VALUES (?, ?, ?, 'BOOKED')"
+                "INSERT INTO Appointments (patient_id, doctor_id, slot_id, hospital_id, status) VALUES (?, ?, ?, ?, 'BOOKED')"
             ),
-            _adapt_params([patient_id, doctor_id, slot["id"]]),
+            _adapt_params([patient_id, doctor_id, slot["id"], final_hospital_id]),
         )
         conn.commit()
     except Exception:
@@ -267,47 +299,58 @@ async def book_appointment(name: str, doctor: str, department: str, symptoms: li
         "department": resolved_dept,
         "date": date,
         "time": time,
+        "hospital_id": final_hospital_id,
+        "hospital": final_hospital_name,
     }
 
+    hosp_suffix = f" at {final_hospital_name}" if final_hospital_name else ""
     if symptoms:
-        msg = f"Since you are experiencing {symptoms[0]}, I have booked you with {final_doctor_name} in {resolved_dept} on {date} at {time}."
+        msg = f"Since you are experiencing {symptoms[0]}, I have booked you with {final_doctor_name} in {resolved_dept}{hosp_suffix} on {date} at {time}."
     elif department:
-        msg = f"I have booked you with {final_doctor_name} in {resolved_dept} on {date} at {time}."
+        msg = f"I have booked you with {final_doctor_name} in {resolved_dept}{hosp_suffix} on {date} at {time}."
     else:
-        msg = f"Great! Your appointment with {final_doctor_name} on {date} at {time} has been successfully booked."
+        msg = f"Great! Your appointment with {final_doctor_name}{hosp_suffix} on {date} at {time} has been successfully booked."
 
     return True, msg, context
 
 
-def _find_booked_appointments(cursor, name: str, date: str) -> list:
+def _find_booked_appointments(cursor, name: str, date: str, hospital_id: Optional[int] = None) -> list:
     """
     Find BOOKED appointments on `date` for any patient whose name matches
     `name` (after the same cleaning used at booking time), earliest first.
+    Optionally filtered by hospital_id.
     """
     clean = _clean_patient_name(name)
     if _USE_POSTGRES:
         name_clause = "lower(p.name) = lower(%s)"
     else:
         name_clause = "p.name = ? COLLATE NOCASE"
+
+    params = [clean, date]
+    hosp_clause = ""
+    if hospital_id:
+        hosp_clause = " AND a.hospital_id = ?"
+        params.append(hospital_id)
+
     cursor.execute(
         _adapt_sql(f"""
-            SELECT a.id AS appt_id, a.patient_id, a.doctor_id, s.id AS slot_id, s.slot_time
+            SELECT a.id AS appt_id, a.patient_id, a.doctor_id, a.hospital_id, s.id AS slot_id, s.slot_time
             FROM Appointments a
             JOIN Slots s    ON a.slot_id = s.id
             JOIN Patients p ON a.patient_id = p.id
-            WHERE {name_clause} AND s.slot_date = ? AND a.status = 'BOOKED'
+            WHERE {name_clause} AND s.slot_date = ? AND a.status = 'BOOKED'{hosp_clause}
             ORDER BY s.slot_time
         """),
-        _adapt_params([clean, date]),
+        _adapt_params(params),
     )
     return cursor.fetchall()
 
 
-def cancel_appointment(name: str, date: str) -> tuple[bool, str]:
+def cancel_appointment(name: str, date: str, hospital_id: Optional[int] = None) -> tuple[bool, str]:
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        appts = _find_booked_appointments(cursor, name, date)
+        appts = _find_booked_appointments(cursor, name, date, hospital_id=hospital_id)
         if not appts:
             return False, f"Sorry, I couldn't find a booked appointment on {date} for {name}."
 
@@ -330,7 +373,13 @@ def cancel_appointment(name: str, date: str) -> tuple[bool, str]:
         conn.close()
 
 
-def reschedule_appointment(name: str, current_date: str, new_date: str, new_time: str) -> tuple[bool, str]:
+def reschedule_appointment(
+    name: str,
+    current_date: str,
+    new_date: str,
+    new_time: str,
+    hospital_id: Optional[int] = None,
+) -> tuple[bool, str]:
     err = _slot_request_error(new_date, new_time)
     if err:
         return False, err
@@ -338,7 +387,7 @@ def reschedule_appointment(name: str, current_date: str, new_date: str, new_time
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        appts = _find_booked_appointments(cursor, name, current_date)
+        appts = _find_booked_appointments(cursor, name, current_date, hospital_id=hospital_id)
         if not appts:
             return False, f"Sorry, I couldn't find a booked appointment on {current_date} for {name}."
 
@@ -376,10 +425,10 @@ def reschedule_appointment(name: str, current_date: str, new_date: str, new_time
         )
         cursor.execute(
             _adapt_sql(
-                "INSERT INTO Appointments (patient_id, doctor_id, slot_id, status) "
-                "VALUES (?, ?, ?, 'BOOKED')"
+                "INSERT INTO Appointments (patient_id, doctor_id, slot_id, hospital_id, status) "
+                "VALUES (?, ?, ?, ?, 'BOOKED')"
             ),
-            _adapt_params([appt["patient_id"], appt["doctor_id"], new_slot["id"]]),
+            _adapt_params([appt["patient_id"], appt["doctor_id"], new_slot["id"], appt["hospital_id"] or 1]),
         )
         conn.commit()
         return True, f"Your appointment has been successfully rescheduled from {current_date} to {new_date} at {new_time}."
@@ -389,15 +438,25 @@ def reschedule_appointment(name: str, current_date: str, new_date: str, new_time
     finally:
         conn.close()
 
-def check_availability(date: str) -> tuple[bool, str]:
+def check_availability(date: str, hospital_id: Optional[int] = None) -> tuple[bool, str]:
     conn = get_connection()
     cursor = conn.cursor()
 
     booked_false = False if _USE_POSTGRES else 0
-    cursor.execute(
-        _adapt_sql("SELECT COUNT(id) as count FROM Slots WHERE slot_date = ? AND is_booked = ?"),
-        _adapt_params([date, booked_false]),
-    )
+    if hospital_id:
+        cursor.execute(
+            _adapt_sql(
+                "SELECT COUNT(s.id) as count FROM Slots s "
+                "JOIN Doctors d ON s.doctor_id = d.id "
+                "WHERE s.slot_date = ? AND s.is_booked = ? AND d.hospital_id = ?"
+            ),
+            _adapt_params([date, booked_false, hospital_id]),
+        )
+    else:
+        cursor.execute(
+            _adapt_sql("SELECT COUNT(id) as count FROM Slots WHERE slot_date = ? AND is_booked = ?"),
+            _adapt_params([date, booked_false]),
+        )
     count = cursor.fetchone()["count"]
     conn.close()
 

@@ -13,6 +13,43 @@ const navLinks = document.querySelectorAll('.nav-links a');
 
 // Auth state
 let authHeader = '';
+let selectedHospitalId = '';
+const hospitalSelector = document.getElementById('hospital-selector');
+
+if (hospitalSelector) {
+    hospitalSelector.addEventListener('change', (e) => {
+        selectedHospitalId = e.target.value;
+        loadDashboardData();
+        const activeSection = document.querySelector('.nav-links a.active')?.getAttribute('data-target');
+        if (activeSection === 'slots-section') {
+            loadSlotsAndDoctors();
+        }
+    });
+}
+
+function withHospitalQuery(endpoint) {
+    if (!selectedHospitalId) return endpoint;
+    const sep = endpoint.includes('?') ? '&' : '?';
+    return `${endpoint}${sep}hospital_id=${encodeURIComponent(selectedHospitalId)}`;
+}
+
+async function loadHospitals() {
+    if (!hospitalSelector) return;
+    try {
+        const hospitals = await apiFetch('/hospitals');
+        const currentVal = hospitalSelector.value;
+        hospitalSelector.innerHTML = '<option value="">All Hospitals</option>';
+        hospitals.forEach(h => {
+            const opt = document.createElement('option');
+            opt.value = h.id;
+            opt.textContent = `${h.name} (${h.city || 'Main'})`;
+            hospitalSelector.appendChild(opt);
+        });
+        hospitalSelector.value = currentVal;
+    } catch (err) {
+        console.error('loadHospitals error:', err);
+    }
+}
 
 // Check if already logged in
 const savedAuth = sessionStorage.getItem('voxmed_auth');
@@ -61,6 +98,7 @@ logoutBtn.addEventListener('click', () => {
 function showDashboard() {
     loginView.classList.add('hidden');
     dashboardView.classList.remove('hidden');
+    loadHospitals();
     loadDashboardData();
 }
 
@@ -112,7 +150,7 @@ async function apiFetch(endpoint, options = {}) {
 // ── Data Loading ──────────────────────────────────────────
 async function loadDashboardData() {
     try {
-        const stats = await apiFetch('/dashboard-stats');
+        const stats = await apiFetch(withHospitalQuery('/dashboard-stats'));
         document.getElementById('stat-today-appointments').textContent = stats.today_appointments;
         document.getElementById('stat-total-active').textContent = stats.total_active_appointments;
         document.getElementById('stat-total-doctors').textContent = stats.total_doctors;
@@ -125,13 +163,14 @@ async function loadDashboardData() {
 
 async function loadAppointments() {
     try {
-        const appointments = await apiFetch('/appointments');
+        const appointments = await apiFetch(withHospitalQuery('/appointments'));
         const tbody = document.querySelector('#appointments-table tbody');
         tbody.innerHTML = '';
 
         appointments.forEach(app => {
             const tr = document.createElement('tr');
             tr.innerHTML = `
+                <td>${app.hospital_name || 'Apollo Hospital'}</td>
                 <td>${app.slot_date}</td>
                 <td>${app.slot_time}</td>
                 <td>${app.patient_name}</td>
@@ -203,8 +242,8 @@ document.querySelector('#appointments-table tbody').addEventListener('click', as
 async function loadSlotsAndDoctors() {
     try {
         const [doctors, slots] = await Promise.all([
-            apiFetch('/doctors'),
-            apiFetch('/slots')
+            apiFetch(withHospitalQuery('/doctors')),
+            apiFetch(withHospitalQuery('/slots'))
         ]);
         
         // Populate doctor selects
@@ -217,7 +256,8 @@ async function loadSlotsAndDoctors() {
             doctors.forEach(doc => {
                 const opt = document.createElement('option');
                 opt.value = doc.id;
-                opt.textContent = `${doc.name} (${doc.department})`;
+                const hospSuffix = (!selectedHospitalId && doc.hospital_name) ? ` — ${doc.hospital_name}` : '';
+                opt.textContent = `${doc.name} (${doc.department})${hospSuffix}`;
                 select.appendChild(opt);
             });
             select.value = currentVal;
@@ -228,13 +268,13 @@ async function loadSlotsAndDoctors() {
         
         renderSlotsTable(slots);
         
-        // Add filter listener
-        filterSelect.addEventListener('change', async (e) => {
+        // Add filter listener (replace onchange so we don't stack duplicate listeners)
+        filterSelect.onchange = async (e) => {
             const docId = e.target.value;
             const endpoint = docId ? `/slots?doctor_id=${docId}` : '/slots';
-            const filteredSlots = await apiFetch(endpoint);
+            const filteredSlots = await apiFetch(withHospitalQuery(endpoint));
             renderSlotsTable(filteredSlots);
-        });
+        };
         
     } catch (err) {
         console.error(err);
@@ -248,6 +288,7 @@ function renderSlotsTable(slots) {
     slots.forEach(slot => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
+            <td>${slot.hospital_name || 'Apollo Hospital'}</td>
             <td>${slot.doctor_name}</td>
             <td>${slot.slot_date}</td>
             <td>${slot.slot_time}</td>

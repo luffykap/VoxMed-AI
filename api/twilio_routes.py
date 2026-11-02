@@ -4,6 +4,7 @@ from twilio.twiml.voice_response import VoiceResponse, Gather, Dial
 import os
 from typing import Dict
 
+from database import get_all_hospitals, resolve_hospital, get_hospital_by_id
 from processing.orchestrator import ConversationOrchestrator
 from utils.logger import get_logger
 
@@ -13,6 +14,8 @@ router = APIRouter()
 
 # In-memory store for active calls (CallSid -> ConversationOrchestrator)
 active_calls: Dict[str, ConversationOrchestrator] = {}
+# Temporary store for language choice before hospital is selected (CallSid -> (language_name, lang_code))
+pending_call_lang: Dict[str, tuple[str, str]] = {}
 
 def get_twiml_response(reply_text: str, is_finished: bool, lang_code: str = "en") -> str:
     """Helper to generate TwiML for a reply and gather more input if needed."""
@@ -161,9 +164,29 @@ async def twilio_emergency_transfer_status(request: Request):
         
     return HTMLResponse(content=str(response), media_type="application/xml")
 
+def _build_hospital_prompt(lang_code: str) -> str:
+    """Build a localized hybrid (keypad + voice) hospital selection prompt from DB hospitals."""
+    hospitals = get_all_hospitals()
+    if not hospitals:
+        return "Please say the name of the hospital or press 1."
+
+    if lang_code == "hi":
+        options = ". ".join(f"{h['name']} के लिए {idx} दबाएं या नाम बोलें" for idx, h in enumerate(hospitals, 1))
+        return f"कृपया अस्पताल चुनें। {options}."
+    elif lang_code == "kn":
+        options = ". ".join(f"{h['name']} ಗಾಗಿ {idx} ಒತ್ತಿರಿ ಅಥವಾ ಹೆಸರನ್ನು ಹೇಳಿ" for idx, h in enumerate(hospitals, 1))
+        return f"ದಯವಿಟ್ಟು ಆಸ್ಪತ್ರೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ. {options}."
+    elif lang_code == "te":
+        options = ". ".join(f"{h['name']} కోసం {idx} నొక్కండి లేదా పేరు చెప్పండి" for idx, h in enumerate(hospitals, 1))
+        return f"దయచేసి ఆసుపత్రిని ఎంచుకోండి. {options}."
+    else:
+        options = ". ".join(f"Press {idx} or say {h['name']}" for idx, h in enumerate(hospitals, 1))
+        return f"Please select a hospital. {options}."
+
+
 @router.post("/twilio/language_selected")
 async def twilio_language_selected(request: Request):
-    """Webhook triggered after language is selected."""
+    """Webhook triggered after language is selected. Prompts caller to select a hospital (keypad or voice)."""
     form_data = await request.form()
     call_sid = form_data.get("CallSid", "")
     
@@ -173,23 +196,77 @@ async def twilio_language_selected(request: Request):
     if digits == "2":
         language = "Hindi"
         lang_code = "hi"
+        twilio_lang = "hi-IN"
     elif digits == "3":
         language = "Kannada"
         lang_code = "kn"
+        twilio_lang = "kn-IN"
     elif digits == "4":
         language = "Telugu"
         lang_code = "te"
+        twilio_lang = "te-IN"
     else:
         language = "English"
         lang_code = "en"
+        twilio_lang = "en-IN"
         
     logger.info("Language selected | CallSid=%s | Digits=%s | Language=%s", call_sid, digits, language)
+    pending_call_lang[call_sid] = (language, lang_code)
 
-    dm = ConversationOrchestrator(language=language)
+    response = VoiceResponse()
+    gather_hosp = Gather(
+        input="dtmf speech",
+        numDigits=1,
+        action=f"/twilio/hospital_selected?lang={lang_code}",
+        method="POST",
+        timeout=5,
+        speechTimeout="auto",
+        language=twilio_lang,
+    )
+    gather_hosp.say(_build_hospital_prompt(lang_code), language=twilio_lang)
+    response.append(gather_hosp)
+
+    # Fallback if caller stays silent: default to Hospital 1
+    response.redirect(f"/twilio/hospital_selected?Digits=1&lang={lang_code}", method="POST")
+    return HTMLResponse(content=str(response), media_type="application/xml")
+
+
+@router.post("/twilio/hospital_selected")
+async def twilio_hospital_selected(request: Request):
+    """Webhook triggered after caller selects a hospital via keypad (Digits) or voice (SpeechResult)."""
+    form_data = await request.form()
+    call_sid = form_data.get("CallSid", "")
+
+    digits = (form_data.get("Digits") or request.query_params.get("Digits") or "").strip()
+    speech_result = (form_data.get("SpeechResult") or "").strip()
+    lang_param = request.query_params.get("lang", "en")
+
+    lang_map = {
+        "hi": ("Hindi", "hi"),
+        "kn": ("Kannada", "kn"),
+        "te": ("Telugu", "te"),
+        "en": ("English", "en"),
+    }
+    language, lang_code = pending_call_lang.pop(call_sid, lang_map.get(lang_param, ("English", "en")))
+
+    # Hybrid resolution: try keypad digit first, then spoken hospital name, then default to first hospital
+    hospital = resolve_hospital(digits or speech_result) or get_hospital_by_id(1)
+    hosp_id = hospital["id"] if hospital else 1
+    hosp_name = hospital["name"] if hospital else "Apollo Hospital"
+
+    logger.info(
+        "Hospital selected | CallSid=%s | Digits=%s | Speech=%r | Hospital=%s (id=%s)",
+        call_sid, digits, speech_result, hosp_name, hosp_id,
+    )
+
+    dm = ConversationOrchestrator(
+        language=language,
+        hospital_id=hosp_id,
+        hospital_name=hosp_name,
+    )
     active_calls[call_sid] = dm
 
     greeting = dm.get_greeting(lang_code=lang_code)
-    
     twiml = get_twiml_response(greeting, dm.is_finished, lang_code=lang_code)
     return HTMLResponse(content=twiml, media_type="application/xml")
 

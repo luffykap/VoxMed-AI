@@ -26,6 +26,7 @@ import os
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 import config  # loads .env via load_dotenv()
+from database import get_all_hospitals, resolve_hospital
 from processing.orchestrator import ConversationOrchestrator
 
 # TTS is optional — if the module fails to load, voice output is silently disabled.
@@ -56,6 +57,7 @@ except ImportError:
 def _print_memory(dm: ConversationOrchestrator) -> None:
     m = dm.memory
     print(f"\n{SYS}── Memory ──────────────────────────────────────────────")
+    print(f"  hospital : {dm.hospital_name} (id={dm.hospital_id})")
     print(f"  intent   : {m.intent}")
     print(f"  entities : {m.entities}")
     print(f"  missing  : {m.missing_entities()}")
@@ -67,13 +69,27 @@ def _print_memory(dm: ConversationOrchestrator) -> None:
     print(f"────────────────────────────────────────────────────{RST}\n")
 
 
-def run_session(language: str = "en", tts_enabled: bool = False) -> None:
+def run_session(language: str = "en", tts_enabled: bool = False, hospital_query: str = None) -> None:
     print(f"\n{SYS}=== VoxMed AI  –  Text {'+ Voice' if tts_enabled else 'Only'} Mode ==={RST}")
     providers = " -> ".join(config.LLM_PROVIDER_CHAIN)
     print(f"{SYS}Language: {language}  |  Providers: {providers}  |  TTS: {'ON' if tts_enabled else 'OFF'}{RST}")
     print(f"{SYS}Commands: /reset  /memory  /entities  /tts  quit{RST}\n")
 
-    dm = ConversationOrchestrator(language=language)
+    hospitals = get_all_hospitals()
+    selected_hosp = resolve_hospital(hospital_query) if hospital_query else None
+    if not selected_hosp and hospitals:
+        menu = "  ".join(f"[{idx}] {h['name']}" for idx, h in enumerate(hospitals, 1))
+        print(f"{AI}[AI]: Please select a hospital (press number or type name): {menu}{RST}")
+        try:
+            choice = input(f"{YOU}[You (Hospital, Enter=1)]: {RST}").strip() or "1"
+        except (EOFError, KeyboardInterrupt):
+            return
+        selected_hosp = resolve_hospital(choice) or hospitals[0]
+
+    hosp_id = selected_hosp["id"] if selected_hosp else None
+    hosp_name = selected_hosp["name"] if selected_hosp else None
+
+    dm = ConversationOrchestrator(language=language, hospital_id=hosp_id, hospital_name=hosp_name)
     greeting = dm.get_greeting()
     print(f"{AI}[AI]: {greeting}{RST}\n")
     if tts_enabled:
@@ -97,7 +113,7 @@ def run_session(language: str = "en", tts_enabled: bool = False) -> None:
 
         if lower == "/reset":
             print(f"{SYS}Starting fresh session…{RST}\n")
-            run_session(language, tts_enabled=tts_enabled)
+            run_session(language, tts_enabled=tts_enabled, hospital_query=hospital_query)
             return
 
         if lower == "/tts":
@@ -116,7 +132,7 @@ def run_session(language: str = "en", tts_enabled: bool = False) -> None:
 
         # ── Normal conversation turn ──────────────────────────────────────────
         print(f"{SYS}  [thinking…]{RST}", end="\r")
-        response = dm.process(raw)
+        import asyncio; response = asyncio.run(dm.process(raw))
         print(" " * 20, end="\r")   # clear the "thinking" line
         print(f"{AI}[AI]: {response}{RST}\n")
         if tts_enabled:
@@ -136,6 +152,10 @@ def main() -> None:
         "--tts", action="store_true", default=False,
         help="Enable text-to-speech voice output for AI replies"
     )
+    parser.add_argument(
+        "--hospital", default=None,
+        help="Hospital name or keypad number (e.g. '1', 'Apollo', 'Manipal', 'Fortis')"
+    )
     args = parser.parse_args()
 
     # Warn if no provider has an API key configured
@@ -149,7 +169,7 @@ def main() -> None:
             f"   Add at least one provider key (e.g. GEMINI_API_KEY) to .env for full LLM mode.{RST}\n"
         )
 
-    run_session(language=args.lang, tts_enabled=args.tts)
+    run_session(language=args.lang, tts_enabled=args.tts, hospital_query=args.hospital)
 
 
 if __name__ == "__main__":

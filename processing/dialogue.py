@@ -509,14 +509,15 @@ class DialogueManager:
         from services import appointments
         
         if self.intent == "book_appointment":
-            success, msg, context = appointments.book_appointment(
+            import asyncio
+            success, msg, context = asyncio.run(appointments.book_appointment(
                 name=self.entities.get("patient_name"),
                 doctor=self.entities.get("doctor"),
                 department=self.entities.get("department"),
                 symptoms=self.entities.get("symptoms", []),
                 date=self.entities.get("date"),
                 time=self.entities.get("time")
-            )
+            ))
             return msg
             
         elif self.intent == "cancel_appointment":

@@ -22,13 +22,12 @@ Endpoints
   Utilities:
     GET    /health            — liveness check (used by Railway/Render)
 """
-from __future__ import annotations
 
 import secrets
 from pathlib import Path
 from api.twilio_routes import router as twilio_router
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -115,20 +114,43 @@ class SlotCreate(BaseModel):
 
 # ── Admin API endpoints ───────────────────────────────────────────────────────
 
-@app.get("/api/appointments", tags=["admin"])
+@app.get("/api/hospitals", tags=["admin"])
 @limiter.limit("60/minute")
-def get_appointments(request: Request, username: str = Depends(verify_credentials)):
+def get_hospitals(request: Request, username: str = Depends(verify_credentials)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute("SELECT id, name, city, address, phone, opening_hours FROM Hospitals ORDER BY id")
+    hospitals = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return hospitals
+
+
+@app.get("/api/appointments", tags=["admin"])
+@limiter.limit("60/minute")
+def get_appointments(
+    request: Request,
+    hospital_id: int = None,
+    username: str = Depends(verify_credentials),
+):
+    conn = get_connection()
+    cursor = conn.cursor()
+    query = """
         SELECT a.id, p.name as patient_name, p.phone as patient_phone,
-               d.name as doctor_name, s.slot_date, s.slot_time, a.status
+               d.name as doctor_name, s.slot_date, s.slot_time, a.status,
+               a.hospital_id, COALESCE(h.name, 'Apollo Hospital') as hospital_name
         FROM Appointments a
         JOIN Patients p ON a.patient_id = p.id
         JOIN Doctors d ON a.doctor_id = d.id
         JOIN Slots s ON a.slot_id = s.id
-        ORDER BY s.slot_date DESC, s.slot_time DESC
-    """)
+        LEFT JOIN Hospitals h ON a.hospital_id = h.id
+        WHERE 1=1
+    """
+    params = []
+    if hospital_id:
+        query += _adapt_sql(" AND a.hospital_id = ?")
+        params.append(hospital_id)
+    query += " ORDER BY s.slot_date DESC, s.slot_time DESC"
+    cursor.execute(query, _adapt_params(params))
     appointments = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return appointments
@@ -171,15 +193,27 @@ def delete_appointment(
 
 @app.get("/api/doctors", tags=["admin"])
 @limiter.limit("60/minute")
-def get_doctors(request: Request, username: str = Depends(verify_credentials)):
+def get_doctors(
+    request: Request,
+    hospital_id: int = None,
+    username: str = Depends(verify_credentials),
+):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT d.id, d.name, dept.name as department
+    query = """
+        SELECT d.id, d.name, dept.name as department, d.hospital_id,
+               COALESCE(h.name, 'Apollo Hospital') as hospital_name
         FROM Doctors d
         JOIN Departments dept ON d.department_id = dept.id
-        ORDER BY d.name
-    """)
+        LEFT JOIN Hospitals h ON d.hospital_id = h.id
+        WHERE 1=1
+    """
+    params = []
+    if hospital_id:
+        query += _adapt_sql(" AND d.hospital_id = ?")
+        params.append(hospital_id)
+    query += " ORDER BY d.name"
+    cursor.execute(query, _adapt_params(params))
     doctors = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return doctors
@@ -190,6 +224,7 @@ def get_doctors(request: Request, username: str = Depends(verify_credentials)):
 def get_slots(
     request: Request,
     doctor_id: int = None,
+    hospital_id: int = None,
     date: str = None,
     username: str = Depends(verify_credentials),
 ):
@@ -197,13 +232,18 @@ def get_slots(
     cursor = conn.cursor()
 
     query = """
-        SELECT s.id, d.name as doctor_name, s.slot_date, s.slot_time, s.is_booked
+        SELECT s.id, d.name as doctor_name, s.slot_date, s.slot_time, s.is_booked,
+               d.hospital_id, COALESCE(h.name, 'Apollo Hospital') as hospital_name
         FROM Slots s
         JOIN Doctors d ON s.doctor_id = d.id
+        LEFT JOIN Hospitals h ON d.hospital_id = h.id
         WHERE 1=1
     """
     params = []
 
+    if hospital_id:
+        query += _adapt_sql(" AND d.hospital_id = ?")
+        params.append(hospital_id)
     if doctor_id:
         query += _adapt_sql(" AND s.doctor_id = ?")
         params.append(doctor_id)
@@ -212,7 +252,7 @@ def get_slots(
         params.append(date)
 
     query += " ORDER BY s.slot_date, s.slot_time"
-    cursor.execute(query, params)
+    cursor.execute(query, _adapt_params(params))
     slots = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return slots
@@ -244,35 +284,67 @@ def create_slot(
 
 @app.get("/api/dashboard-stats", tags=["admin"])
 @limiter.limit("60/minute")
-def get_dashboard_stats(request: Request, username: str = Depends(verify_credentials)):
+def get_dashboard_stats(
+    request: Request,
+    hospital_id: int = None,
+    username: str = Depends(verify_credentials),
+):
     from datetime import date as _date
 
     today = _date.today().isoformat()
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute(
-        _adapt_sql("""
-        SELECT COUNT(a.id) as count
-        FROM Appointments a
-        JOIN Slots s ON a.slot_id = s.id
-        WHERE s.slot_date = ? AND a.status = 'BOOKED'
-        """),
-        _adapt_params([today]),
-    )
-    today_appointments = cursor.fetchone()["count"]
+    if hospital_id:
+        cursor.execute(
+            _adapt_sql("""
+            SELECT COUNT(a.id) as count
+            FROM Appointments a
+            JOIN Slots s ON a.slot_id = s.id
+            WHERE s.slot_date = ? AND a.status = 'BOOKED' AND a.hospital_id = ?
+            """),
+            _adapt_params([today, hospital_id]),
+        )
+        today_appointments = cursor.fetchone()["count"]
 
-    cursor.execute("SELECT COUNT(id) as count FROM Doctors")
-    total_doctors = cursor.fetchone()["count"]
+        cursor.execute(
+            _adapt_sql("SELECT COUNT(id) as count FROM Doctors WHERE hospital_id = ?"),
+            _adapt_params([hospital_id]),
+        )
+        total_doctors = cursor.fetchone()["count"]
 
-    cursor.execute("SELECT COUNT(id) as count FROM Appointments WHERE status = 'BOOKED'")
-    total_active_appointments = cursor.fetchone()["count"]
+        cursor.execute(
+            _adapt_sql("SELECT COUNT(id) as count FROM Appointments WHERE status = 'BOOKED' AND hospital_id = ?"),
+            _adapt_params([hospital_id]),
+        )
+        total_active_appointments = cursor.fetchone()["count"]
+    else:
+        cursor.execute(
+            _adapt_sql("""
+            SELECT COUNT(a.id) as count
+            FROM Appointments a
+            JOIN Slots s ON a.slot_id = s.id
+            WHERE s.slot_date = ? AND a.status = 'BOOKED'
+            """),
+            _adapt_params([today]),
+        )
+        today_appointments = cursor.fetchone()["count"]
+
+        cursor.execute("SELECT COUNT(id) as count FROM Doctors")
+        total_doctors = cursor.fetchone()["count"]
+
+        cursor.execute("SELECT COUNT(id) as count FROM Appointments WHERE status = 'BOOKED'")
+        total_active_appointments = cursor.fetchone()["count"]
+
+    cursor.execute("SELECT COUNT(id) as count FROM Hospitals")
+    total_hospitals = cursor.fetchone()["count"]
 
     conn.close()
     return {
         "today_appointments": today_appointments,
         "total_doctors": total_doctors,
         "total_active_appointments": total_active_appointments,
+        "total_hospitals": total_hospitals,
     }
 
 

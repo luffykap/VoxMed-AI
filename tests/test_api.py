@@ -175,3 +175,65 @@ def test_cancel_appointment_via_api(client, auth_headers):
 def test_cancel_nonexistent_returns_404(client, auth_headers):
     resp = client.delete("/api/appointments/999999", headers=auth_headers)
     assert resp.status_code == 404
+
+
+# ── Multi-Hospital & Hybrid Twilio tests ──────────────────────────────────────
+
+def test_get_hospitals_returns_default_hospitals(client, auth_headers):
+    resp = client.get("/api/hospitals", headers=auth_headers)
+    assert resp.status_code == 200
+    hospitals = resp.json()
+    assert len(hospitals) >= 3
+    names = [h["name"] for h in hospitals]
+    assert "Apollo Hospital" in names
+    assert "Manipal Hospital" in names
+    assert "Fortis Hospital" in names
+
+
+def test_doctors_and_appointments_scoped_by_hospital(client, auth_headers):
+    conn = database.get_connection()
+    cursor = conn.cursor()
+    # Hospital 1 doctor
+    cursor.execute("INSERT OR IGNORE INTO Departments (name, hospital_id) VALUES ('Cardiology', 1)")
+    dept1 = cursor.execute("SELECT id FROM Departments WHERE name = 'Cardiology' AND hospital_id = 1").fetchone()["id"]
+    cursor.execute("INSERT INTO Doctors (name, department_id, hospital_id) VALUES ('Dr. ApolloDoc', ?, 1)", (dept1,))
+
+    # Hospital 2 doctor
+    cursor.execute("INSERT OR IGNORE INTO Departments (name, hospital_id) VALUES ('Cardiology', 2)")
+    dept2 = cursor.execute("SELECT id FROM Departments WHERE name = 'Cardiology' AND hospital_id = 2").fetchone()["id"]
+    cursor.execute("INSERT INTO Doctors (name, department_id, hospital_id) VALUES ('Dr. ManipalDoc', ?, 2)", (dept2,))
+    conn.commit()
+    conn.close()
+
+    h1_docs = [d["name"] for d in client.get("/api/doctors?hospital_id=1", headers=auth_headers).json()]
+    h2_docs = [d["name"] for d in client.get("/api/doctors?hospital_id=2", headers=auth_headers).json()]
+
+    assert "Dr. ApolloDoc" in h1_docs
+    assert "Dr. ManipalDoc" not in h1_docs
+    assert "Dr. ManipalDoc" in h2_docs
+    assert "Dr. ApolloDoc" not in h2_docs
+
+
+def test_twilio_hybrid_hospital_selection_keypad_and_voice(client):
+    # Step 1: Language selected -> returns hybrid Gather (dtmf speech) for hospital menu
+    resp_lang = client.post("/twilio/language_selected", data={"CallSid": "CA_TEST_1", "Digits": "1"})
+    assert resp_lang.status_code == 200
+    assert "Apollo Hospital" in resp_lang.text
+    assert "Manipal Hospital" in resp_lang.text
+    assert 'input="dtmf speech"' in resp_lang.text
+
+    # Step 2a: Select hospital via Keypad (Digits=2 -> Manipal Hospital)
+    resp_hosp_dtmf = client.post(
+        "/twilio/hospital_selected?lang=en",
+        data={"CallSid": "CA_TEST_1", "Digits": "2"},
+    )
+    assert resp_hosp_dtmf.status_code == 200
+    assert "Manipal Hospital" in resp_hosp_dtmf.text
+
+    # Step 2b: Select hospital via Voice (SpeechResult="Fortis Hospital")
+    resp_hosp_voice = client.post(
+        "/twilio/hospital_selected?lang=en",
+        data={"CallSid": "CA_TEST_2", "SpeechResult": "Fortis Hospital"},
+    )
+    assert resp_hosp_voice.status_code == 200
+    assert "Fortis Hospital" in resp_hosp_voice.text

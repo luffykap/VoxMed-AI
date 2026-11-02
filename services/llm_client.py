@@ -111,6 +111,7 @@ _SYSTEM_DETECT_INTENT = (
     '{{"intent": "<book_appointment|cancel_appointment|reschedule_appointment|check_availability|medicine_information|doctor_information|department_information|hospital_timings|insurance_query|parking_query|cost_query|emergency|human_agent|general_chat|out_of_scope>",'
     ' "entities": {{}}, "confidence": 0.0}}\n\n'
     "Entity rules (include ONLY what is explicitly in this message):\n"
+    "- hospital: hospital name if stated (e.g. 'Apollo Hospital', 'Manipal Hospital', 'Fortis Hospital')\n"
     "- patient_name: only if stated ('my name is X', 'for X')\n"
     "- doctor: 'Dr. Lastname' format\n"
     "- department: medical department name\n"
@@ -137,6 +138,7 @@ _SYSTEM_EXTRACT_ENTITIES = (
     '{{"entities": {{}}, "intent_switch": false, "side_query": null}}\n\n'
     "- side_query: If the user asks a question instead of answering (e.g. 'what slots are free today?'), extract the core intent here (e.g., 'check_availability').\n"
     "- Include only entity keys that are NEW or CHANGED in this message.\n"
+    "- hospital: hospital name if mentioned or changed (e.g. 'Apollo Hospital', 'Manipal Hospital', 'Fortis Hospital').\n"
     "- intent_switch=true ONLY if user explicitly abandons current goal ('cancel instead', 'forget it').\n"
     "- date: YYYY-MM-DD. time: HH:MM 24h. If user says 'anytime' or 'whichever', extract 'ANY'. If they ask about general dates, extract 'ANY' for date.\n"
     "  IMPORTANT: explicitly resolve relative words like 'tomorrow', 'next week', 'monday' into YYYY-MM-DD using Today ({today}) as the reference. Ignore past dates.\n"
@@ -302,12 +304,12 @@ async def _call_with_failover(
 
         try:
             result = await _call_provider(name, provider_cfg, messages, json_mode, max_tokens)
-            # In prose mode, an empty response is useless — try the next provider
-            if not json_mode and not result.strip():
+            # An empty response is useless for both prose and JSON — try the next provider
+            if not result.strip():
                 logger.warning(
-                    "Provider %s returned empty prose response -- trying next", name
+                    "Provider %s returned empty response -- trying next", name
                 )
-                last_exc = RuntimeError(f"{name} returned empty prose")
+                last_exc = RuntimeError(f"{name} returned empty response")
                 continue
             logger.info("LLM provider %s succeeded", name)
             _provider_cooldowns.pop(name, None)
@@ -394,6 +396,8 @@ async def understand(
             "doctor_name": "doctor",
             "dept": "department",
             "symptom": "symptoms",
+            "hospital_name": "hospital",
+            "clinic": "hospital",
         }
 
         for old_key, new_key in aliases.items():

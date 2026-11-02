@@ -16,7 +16,16 @@ from typing import Any
 import re
 
 import config
-from database import create_call, end_call, save_conversation, save_ai_log, get_all_departments, get_all_doctors
+from database import (
+    create_call,
+    end_call,
+    save_conversation,
+    save_ai_log,
+    get_all_departments,
+    get_all_doctors,
+    get_hospital_by_id,
+    resolve_hospital,
+)
 from processing.memory import ConversationMemory, REQUIRED_ENTITIES
 from services import llm_client
 from utils.logger import get_logger
@@ -264,15 +273,53 @@ class ConversationOrchestrator:
       - is_finished             → bool  (replaces `state != DialogueState.FAREWELL`)
     """
 
-    def __init__(self, language: str = "en") -> None:
-        self.memory   = ConversationMemory(language=language)
-        self.call_id  = create_call()
+    def __init__(
+        self,
+        language: str = "en",
+        hospital_id: int | None = None,
+        hospital_name: str | None = None,
+    ) -> None:
+        self.memory = ConversationMemory(language=language)
+        self.hospital_id = hospital_id
+        self.hospital_name = hospital_name
+        self.hospital_hours = "Monday to Saturday, 9 AM to 8 PM"
+
+        if self.hospital_id and not self.hospital_name:
+            hosp = get_hospital_by_id(self.hospital_id)
+            if hosp:
+                self.hospital_name = hosp["name"]
+                self.hospital_hours = hosp.get("opening_hours") or self.hospital_hours
+        elif self.hospital_name and not self.hospital_id:
+            hosp = resolve_hospital(self.hospital_name)
+            if hosp:
+                self.hospital_id = hosp["id"]
+                self.hospital_name = hosp["name"]
+                self.hospital_hours = hosp.get("opening_hours") or self.hospital_hours
+
+        if self.hospital_name:
+            self.memory.entities["hospital"] = self.hospital_name
+
+        self.call_id = create_call(hospital_id=self.hospital_id or 1)
         self._finished = False
         self._reschedule_attempts = 0   # counts consecutive failed reschedule slot tries
         self._awaiting_confirmation = False   # True when waiting for user to confirm booking
         self._confirmation_summary: str = ""  # the summary text shown to user before confirming
-        logger.info("ConversationOrchestrator initialized | call_id=%s | lang=%s",
-                    self.call_id, language)
+        logger.info(
+            "ConversationOrchestrator initialized | call_id=%s | lang=%s | hospital=%s (id=%s)",
+            self.call_id, language, self.hospital_name, self.hospital_id,
+        )
+
+    def _sync_hospital(self, candidate: str | int | None) -> None:
+        """Resolve and update active hospital context if user mentioned a hospital."""
+        if not candidate:
+            return
+        hosp = resolve_hospital(candidate)
+        if hosp:
+            self.hospital_id = hosp["id"]
+            self.hospital_name = hosp["name"]
+            self.hospital_hours = hosp.get("opening_hours") or self.hospital_hours
+            self.memory.entities["hospital"] = hosp["name"]
+            logger.info("Active hospital set to %s (id=%d)", self.hospital_name, self.hospital_id)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -282,14 +329,18 @@ class ConversationOrchestrator:
 
     def get_greeting(self, lang_code: str = None) -> str:
         lang = lang_code or "en"
+        hosp_label = self.hospital_name or "VoxMed AI"
         if lang.startswith("hi"):
-            greeting = "वॉक्समेड एआई में आपका स्वागत है। मैं आज आपकी कैसे मदद कर सकता हूँ?"
+            greeting = f"{hosp_label} (वॉक्समेड एआई) में आपका स्वागत है। मैं आज आपकी कैसे मदद कर सकता हूँ?"
         elif lang.startswith("kn"):
-            greeting = "VoxMed AI ಗೆ ಸ್ವಾಗತ. ನಾನು ಇಂದು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಬಹುದು?"
+            greeting = f"{hosp_label} (VoxMed AI) ಗೆ ಸ್ವಾಗತ. ನಾನು ಇಂದು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಬಹುದು?"
         elif lang.startswith("te"):
-            greeting = "VoxMed AI కి స్వాగతం. నేను ఈరోజు మీకు ఎలా సహాయం చేయగలను?"
+            greeting = f"{hosp_label} (VoxMed AI) కి స్వాగతం. నేను ఈరోజు మీకు ఎలా సహాయం చేయగలను?"
         else:
-            greeting = "Welcome to VoxMed AI. How can I help you today?"
+            if self.hospital_name:
+                greeting = f"Welcome to {self.hospital_name} via VoxMed AI. How can I help you today?"
+            else:
+                greeting = "Welcome to VoxMed AI. How can I help you today?"
             
         save_conversation(self.call_id, "AI", greeting)
         self.memory.add_turn("assistant", greeting)
@@ -421,6 +472,16 @@ class ConversationOrchestrator:
         # ⑥ Merge new entities — never overwrites existing (Problem 3)
         self.memory.update_entities(entities)
 
+        # Sync hospital if extracted by LLM or mentioned in user_text
+        if entities.get("hospital"):
+            self._sync_hospital(entities.get("hospital"))
+        elif not self.hospital_id:
+            # Also check if user_text directly mentions a known hospital brand
+            for brand in ("apollo", "manipal", "fortis", "अपोलो", "मणिपाल", "फोर्टिस", "ಅಪೋಲೋ", "ಮಣಿಪಾಲ್", "ಫೋರ್ಟಿಸ್", "అపోలో", "మణిపాల్", "ఫోర్టిస్"):
+                if brand in user_text.lower():
+                    self._sync_hospital(user_text)
+                    break
+
         # Derive medical_need in Python — LLM never decides this
         if any(self.memory.entities.get(k) for k in ("doctor", "department", "symptoms")):
             self.memory.entities["medical_need"] = True
@@ -434,7 +495,7 @@ class ConversationOrchestrator:
         side_query = understanding.get("side_query")
         if side_query == "check_availability":
             from datetime import date as _date
-            from database import get_connection
+            from database import get_connection, _adapt_sql, _adapt_params
             
             target_date = entities.get("date") or self.memory.entities.get("date")
             
@@ -442,18 +503,24 @@ class ConversationOrchestrator:
             conn = get_connection()
             cursor = conn.cursor()
 
+            hosp_filter = " AND doc.hospital_id = ?" if self.hospital_id else ""
+
             if not target_date or target_date == "ANY":
                 # Find the next available slots from today onwards
+                params = [_date.today().isoformat(), dept]
+                if self.hospital_id:
+                    params.append(self.hospital_id)
                 cursor.execute(
-                    """
+                    _adapt_sql(f"""
                     SELECT s.slot_date, s.slot_time, doc.name AS doctor_name
                     FROM Slots s
                     JOIN Doctors doc ON s.doctor_id = doc.id
                     JOIN Departments d ON doc.department_id = d.id
-                    WHERE s.slot_date >= ? AND s.is_booked = 0 AND d.name = ? COLLATE NOCASE
+                    WHERE s.slot_date >= ? AND s.is_booked = 0 AND d.name = ? COLLATE NOCASE{hosp_filter}
                     ORDER BY s.slot_date, s.slot_time
                     LIMIT 3
-                    """, (_date.today().isoformat(), dept)
+                    """),
+                    _adapt_params(params),
                 )
                 slots = cursor.fetchall()
                 if slots:
@@ -462,16 +529,20 @@ class ConversationOrchestrator:
                 else:
                     msg = f"Sorry, there are no available slots in {dept} coming up."
             else:
+                params = [target_date, dept]
+                if self.hospital_id:
+                    params.append(self.hospital_id)
                 cursor.execute(
-                    """
+                    _adapt_sql(f"""
                     SELECT s.slot_time, doc.name AS doctor_name
                     FROM Slots s
                     JOIN Doctors doc ON s.doctor_id = doc.id
                     JOIN Departments d ON doc.department_id = d.id
-                    WHERE s.slot_date = ? AND s.is_booked = 0 AND d.name = ? COLLATE NOCASE
+                    WHERE s.slot_date = ? AND s.is_booked = 0 AND d.name = ? COLLATE NOCASE{hosp_filter}
                     ORDER BY s.slot_time
                     LIMIT 3
-                    """, (target_date, dept)
+                    """),
+                    _adapt_params(params),
                 )
                 slots = cursor.fetchall()
                 if slots:
@@ -553,6 +624,8 @@ class ConversationOrchestrator:
         name     = ents.get("patient_name") or "the patient"
         symptoms = ents.get("symptoms")
         dept     = ents.get("department", config.DEFAULT_DEPARTMENT)
+        if self.hospital_name:
+            dept = f"{dept} ({self.hospital_name})"
 
         self._confirmation_summary = _build_confirmation_summary(
             self.memory.language, doctor, symptoms, dept, date, time, name
@@ -637,7 +710,7 @@ class ConversationOrchestrator:
                 search_date = None if ents.get("date") == "ANY" else ents.get("date")
                 search_time = None if ents.get("time") == "ANY" else ents.get("time")
                 
-                slot = find_available_slot(dept, search_date, search_time)
+                slot = find_available_slot(dept, search_date, search_time, hospital_id=self.hospital_id)
                 if slot:
                     ents["date"] = slot["slot_date"]
                     ents["time"] = slot["slot_time"]
@@ -654,6 +727,7 @@ class ConversationOrchestrator:
                 symptoms=ents.get("symptoms", []),
                 date=ents.get("date"),
                 time=ents.get("time"),
+                hospital_id=self.hospital_id,
             )
             if success:
                 backend_result = {"success": True, "message": msg, **context}
@@ -700,6 +774,7 @@ class ConversationOrchestrator:
             success, msg = appointments.cancel_appointment(
                 ents.get("patient_name"),
                 ents.get("date"),
+                hospital_id=self.hospital_id,
             )
             backend_result = {"success": success, "message": msg}
             self._finished = True
@@ -710,6 +785,7 @@ class ConversationOrchestrator:
                 ents.get("current_date"),
                 ents.get("new_date"),
                 ents.get("new_time"),
+                hospital_id=self.hospital_id,
             )
             if success:
                 self._reschedule_attempts = 0
@@ -754,15 +830,16 @@ class ConversationOrchestrator:
                 self._finished = False
 
         elif intent == "check_availability":
-            success, msg = appointments.check_availability(ents.get("date"))
+            success, msg = appointments.check_availability(ents.get("date"), hospital_id=self.hospital_id)
             backend_result = {"success": success, "message": msg}
             # Non-terminal: user may book after checking
             self._finished = False
 
         elif intent == "general_inquiry":
+            hosp_label = self.hospital_name or "The clinic"
             backend_result = {
                 "success": True,
-                "message": "The clinic is open Monday to Saturday, 9 AM to 8 PM.",
+                "message": f"{hosp_label} is open {self.hospital_hours}.",
             }
             self._finished = True
 
@@ -771,19 +848,22 @@ class ConversationOrchestrator:
             self._finished = True
 
         elif intent == "doctor_information":
-            doctors = get_all_doctors()
-            facts = "We have the following doctors: " + ", ".join([f"{d['doctor_name']} ({d['dept_name']})" for d in doctors])
+            doctors = get_all_doctors(hospital_id=self.hospital_id)
+            hosp_prefix = f"At {self.hospital_name}, we" if self.hospital_name else "We"
+            facts = f"{hosp_prefix} have the following doctors: " + ", ".join([f"{d['doctor_name']} ({d['dept_name']})" for d in doctors])
             backend_result = {"success": True, "facts": facts, "is_qa": True}
             self._finished = True
 
         elif intent == "department_information":
-            departments = get_all_departments()
-            facts = "We offer services in the following departments: " + ", ".join(departments)
+            departments = get_all_departments(hospital_id=self.hospital_id)
+            hosp_prefix = f"At {self.hospital_name}, we" if self.hospital_name else "We"
+            facts = f"{hosp_prefix} offer services in the following departments: " + ", ".join(departments)
             backend_result = {"success": True, "facts": facts, "is_qa": True}
             self._finished = True
 
         elif intent == "hospital_timings":
-            backend_result = {"success": True, "facts": "The clinic is open Monday to Saturday, 9 AM to 8 PM.", "is_qa": True}
+            hosp_label = self.hospital_name or "The clinic"
+            backend_result = {"success": True, "facts": f"{hosp_label} is open {self.hospital_hours}.", "is_qa": True}
             self._finished = True
 
         elif intent == "insurance_query":
@@ -916,7 +996,7 @@ class ConversationOrchestrator:
 
     def _find_alternative_slots(self, requested_date: str | None = None) -> list[dict]:
         """Search for alternatives on the requested date first, then the next 7 days."""
-        from database import get_connection
+        from database import get_connection, _adapt_sql, _adapt_params
         from datetime import date as _date, timedelta, datetime
 
         dept = self.memory.entities.get("department", config.DEFAULT_DEPARTMENT)
@@ -925,12 +1005,21 @@ class ConversationOrchestrator:
         conn = get_connection()
         cursor = conn.cursor()
 
-        # Get department id
-        cursor.execute("SELECT id FROM Departments WHERE name = ? COLLATE NOCASE", (dept,))
+        # Get department id (scoped to hospital if set)
+        if self.hospital_id:
+            cursor.execute(
+                _adapt_sql("SELECT id FROM Departments WHERE name = ? COLLATE NOCASE AND hospital_id = ?"),
+                _adapt_params([dept, self.hospital_id]),
+            )
+        else:
+            cursor.execute(
+                _adapt_sql("SELECT id FROM Departments WHERE name = ? COLLATE NOCASE"),
+                _adapt_params([dept]),
+            )
         dept_row = cursor.fetchone()
         if not dept_row:
             conn.close()
-            logger.info("No department row found for dept=%s", dept)
+            logger.info("No department row found for dept=%s | hospital_id=%s", dept, self.hospital_id)
             return []
 
         dept_id = dept_row["id"]
@@ -939,7 +1028,7 @@ class ConversationOrchestrator:
         
         # 1. Search on the requested date first
         cursor.execute(
-            """
+            _adapt_sql("""
             SELECT s.slot_date, s.slot_time, doc.name AS doctor_name
             FROM   Slots s
             JOIN   Doctors doc ON s.doctor_id = doc.id
@@ -948,8 +1037,8 @@ class ConversationOrchestrator:
               AND  s.is_booked = 0
             ORDER BY s.slot_time
             LIMIT 3
-            """,
-            (dept_id, start_date_str),
+            """),
+            _adapt_params([dept_id, start_date_str]),
         )
         for row in cursor.fetchall():
             alternatives.append(dict(row))
@@ -968,7 +1057,7 @@ class ConversationOrchestrator:
         for day_offset in range(1, 8):
             d = (start_date + timedelta(days=day_offset)).isoformat()
             cursor.execute(
-                """
+                _adapt_sql("""
                 SELECT s.slot_date, s.slot_time, doc.name AS doctor_name
                 FROM   Slots s
                 JOIN   Doctors doc ON s.doctor_id = doc.id
@@ -976,8 +1065,8 @@ class ConversationOrchestrator:
                   AND  s.slot_date = ?
                   AND  s.is_booked = 0
                 LIMIT 1
-                """,
-                (dept_id, d),
+                """),
+                _adapt_params([dept_id, d]),
             )
             row = cursor.fetchone()
             if row:
@@ -996,21 +1085,28 @@ class ConversationOrchestrator:
         if not patient_name or not current_date:
             return None
         try:
-            from database import get_connection
+            from database import get_connection, _adapt_sql, _adapt_params
             conn = get_connection()
-            row = conn.execute(
-                """
+            cursor = conn.cursor()
+            params = [f"%{patient_name}%", current_date]
+            hosp_clause = ""
+            if self.hospital_id:
+                hosp_clause = " AND a.hospital_id = ?"
+                params.append(self.hospital_id)
+            cursor.execute(
+                _adapt_sql(f"""
                 SELECT a.doctor_id
                 FROM   Appointments a
                 JOIN   Patients p ON a.patient_id = p.id
                 JOIN   Slots    s ON a.slot_id    = s.id
                 WHERE  p.name LIKE ? COLLATE NOCASE
                   AND  s.slot_date = ?
-                  AND  a.status = 'BOOKED'
+                  AND  a.status = 'BOOKED'{hosp_clause}
                 LIMIT 1
-                """,
-                (f"%{patient_name}%", current_date),
-            ).fetchone()
+                """),
+                _adapt_params(params),
+            )
+            row = cursor.fetchone()
             conn.close()
             return row["doctor_id"] if row else None
         except Exception:
