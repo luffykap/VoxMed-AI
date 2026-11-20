@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VoxMed AI — Live Multi-Hospital Voice Helpline</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --success: #16a34a;
+      --danger: #dc2626;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px;
+    }
+    .header {
+      width: 100%;
+      max-width: 980px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-badge {
+      background: var(--primary);
+      color: #fff;
+      font-weight: 700;
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    .nav-link {
+      color: #60a5fa;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+      border: 1px solid #3b82f6;
+      padding: 8px 14px;
+      border-radius: 6px;
+    }
+    .grid {
+      width: 100%;
+      max-width: 980px;
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      gap: 24px;
+    }
+    @media (max-width: 820px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 22px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+    }
+    .card-title { font-size: 17px; font-weight: 700; margin-bottom: 6px; }
+    .card-sub { font-size: 13px; color: var(--muted); margin-bottom: 16px; }
+
+    /* SignalWire Click-to-Call Container */
+    .sw-box {
+      background: rgba(37, 99, 235, 0.12);
+      border: 1px solid #3b82f6;
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+    .sw-box h4 { font-size: 14px; margin-bottom: 6px; color: #93c5fd; }
+    .sw-box p { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+    #click2call { display: flex; justify-content: center; margin-bottom: 8px; }
+    #call { margin-top: 8px; }
+
+    /* Phone Dialer */
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 12.5px;
+      font-weight: 600;
+      background: #334155;
+      margin-bottom: 14px;
+    }
+    .status-pill.live { background: rgba(22, 163, 74, 0.2); color: #4ade80; border: 1px solid #16a34a; }
+    .keypad {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin: 14px 0;
+    }
+    .key-btn {
+      background: #0f172a;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 12px 0;
+      border-radius: 10px;
+      font-size: 17px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .key-btn span.sub { font-size: 10px; font-weight: 500; color: var(--muted); margin-top: 2px; }
+    .key-btn:hover { background: #1e293b; border-color: #60a5fa; }
+    .key-btn:active { transform: scale(0.96); }
+
+    .call-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .btn {
+      flex: 1;
+      padding: 12px 16px;
+      border-radius: 10px;
+      border: none;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      color: #fff;
+    }
+    .btn-start { background: var(--success); }
+    .btn-start:hover { background: #15803d; }
+    .btn-hangup { background: var(--danger); }
+    .btn-hangup:hover { background: #b91c1c; }
+    .btn-mic { background: var(--primary); }
+    .btn-mic.listening { background: #d97706; animation: pulse 1.2s infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.65; }
+    }
+
+    /* Live Transcript */
+    .transcript-box {
+      height: 360px;
+      overflow-y: auto;
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .msg {
+      max-width: 85%;
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    .msg.ai {
+      background: #1e3a8a;
+      color: #eff6ff;
+      align-self: flex-start;
+      border-bottom-left-radius: 2px;
+    }
+    .msg.user {
+      background: #334155;
+      color: #f8fafc;
+      align-self: flex-end;
+      border-bottom-right-radius: 2px;
+    }
+    .msg .role {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      opacity: 0.75;
+      margin-bottom: 4px;
+      display: block;
+    }
+    .input-row {
+      display: flex;
+      gap: 10px;
+    }
+    .text-input {
+      flex: 1;
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: var(--text);
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <span class="brand-badge">VoxMed AI</span>
+      <div>
+        <h2 style="font-size: 19px;">Multi-Hospital Voice Helpline (+1 208 480-7222)</h2>
+        <p style="font-size: 12.5px; color: var(--muted);">English &bull; हिन्दी &bull; ಕನ್ನಡ &bull; తెలుగు | Apollo &bull; Manipal &bull; Fortis</p>
+      </div>
+    </div>
+    <a href="/admin" class="nav-link">Open Admin Dashboard &rarr;</a>
+  </div>
+
+  <div class="grid">
+    <!-- Left Card: SignalWire C2C + Interactive Keypad -->
+    <div class="card">
+      <div class="sw-box">
+        <h4>SignalWire WebRTC Click-to-Call</h4>
+        <p>Dials +1 (208) 480-7222 directly from your browser via SignalWire</p>
+        <div id="click2call"></div>
+        <div id="call"></div>
+      </div>
+
+      <div class="card-title">Direct Web Voice &amp; Keypad Simulator</div>
+      <div class="card-sub">Zero hop limits &bull; Instant browser speech recognition &amp; TTS</div>
+
+      <div id="call-status" class="status-pill">Ready to Call</div>
+
+      <div class="call-actions">
+        <button id="btn-start" class="btn btn-start" onclick="startWebCall()">&#128222; Start Voice Call</button>
+        <button id="btn-hangup" class="btn btn-hangup" onclick="endWebCall()" style="display:none;">&#128245; End Call</button>
+      </div>
+
+      <div class="keypad">
+        <button class="key-btn" onclick="pressDigit('1')">1<span class="sub">EN / Apollo</span></button>
+        <button class="key-btn" onclick="pressDigit('2')">2<span class="sub">HI / Manipal</span></button>
+        <button class="key-btn" onclick="pressDigit('3')">3<span class="sub">KN / Fortis</span></button>
+        <button class="key-btn" onclick="pressDigit('4')">4<span class="sub">Telugu</span></button>
+        <button class="key-btn" onclick="pressDigit('5')">5<span class="sub">JKL</span></button>
+        <button class="key-btn" onclick="pressDigit('6')">6<span class="sub">MNO</span></button>
+        <button class="key-btn" onclick="pressDigit('7')">7<span class="sub">PQRS</span></button>
+        <button class="key-btn" onclick="pressDigit('8')">8<span class="sub">TUV</span></button>
+        <button class="key-btn" onclick="pressDigit('9')">9<span class="sub">WXYZ</span></button>
+        <button class="key-btn" onclick="pressDigit('*')">*</button>
+        <button class="key-btn" onclick="pressDigit('0')">0<span class="sub">Emergency</span></button>
+        <button class="key-btn" onclick="pressDigit('#')">#</button>
+      </div>
+
+      <button id="btn-mic" class="btn btn-mic" style="width:100%; margin-top:6px;" onclick="toggleMic()" disabled>
+        &#127908; Hold / Click to Speak
+      </button>
+    </div>
+
+    <!-- Right Card: Live Call Transcript & Voice Input -->
+    <div class="card">
+      <div class="card-title">Live Call Transcript</div>
+      <div class="card-sub">Connected to the live VoxMed AI FastAPI + NeonDB PostgreSQL backend</div>
+
+      <div id="transcript" class="transcript-box">
+        <div class="msg ai">
+          <span class="role">System</span>
+          Click <b>"Start Voice Call"</b> on the left (or use the SignalWire button above) to begin a live voice conversation with VoxMed AI.
+        </div>
+      </div>
+
+      <form class="input-row" onsubmit="sendTextSpeech(event)">
+        <input id="speech-input" class="text-input" type="text" placeholder="Or type spoken response here (e.g., 'I have fever', 'Tomorrow at 10 AM')..." disabled />
+        <button id="btn-send" class="btn btn-mic" type="submit" style="flex:0 0 110px;" disabled>Send</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- SignalWire Click-to-Call Official Embed Script -->
+  <script>
+    (a => {
+      var i, s, k, n = "Signalwire C2C API", o = "sw", c = "spawn", x = "Loaded", h = "authenticate", y = a["apiKey"],
+        r = document, k = window;
+      k = k[o] || (k[o] = {});
+      var w = k.c2c || (k.c2c = {}), l = (p) => new Promise(async (u, v) => {
+        await (s = r.createElement("script"));
+        s.src = `${k.codeRepository}/${p}.js`;
+        w[`${p}${x}`] = () => {
+          delete w[`${p}${a}`];
+          !w[h] ? w[c](h, y).then(u) : u();
+        };
+        s.onerror = () => i = v(Error(n + " could not load."));
+        s.nonce = r.querySelector("script[nonce]")?.nonce || "";
+        r.head.append(s);
+      });
+      k.relayHost = "puc.signalwire.com";
+      k.codeRepository = "https://app.signalwire.com";
+      k.authEndpoint = "https://voxmed-ai.signalwire.com/api/fabric/embeds/tokens";
+      w[c] ? k[h](y) : w[c] = (f, ...n) => new Promise((g,) => {w[f] ? g(w[f](...n)) : l(f).then(() => g(w[f](...n)))})
+    })({ apiKey: "c2c_a7dea975fd233c6b49078aedb5d60b3a", v: "0.0.1" });
+
+    sw.c2c.spawn('C2CButton', {
+      destination: '/external/1-208-480-7222',
+      buttonParentSelector: '#click2call',
+      innerHTML: null,
+      callParentSelector: '#call',
+      beforeCallStartFn: () => { console.log('attempting to start new call...'); return true; },
+      afterCallStartFn: () => { console.log('call started.'); },
+      beforeCallLeaveFn: () => { console.log('attempting to hangup call...'); return true; },
+      afterCallLeaveFn: () => { console.log('call ended.'); },
+      onCallError: (error) => { console.error(error); }
+    });
+  </script>
+
+  <!-- Direct Web Voice & Keypad Simulator Script (Zero Hop Limit) -->
+  <script>
+    let callSid = null;
+    let callStage = "idle"; // idle | emergency_or_lang | hospital | conversation
+    let currentLang = "en-IN";
+    let currentLangCode = "en";
+    let recognition = null;
+    let isListening = false;
+
+    function addMsg(role, text) {
+      const box = document.getElementById("transcript");
+      const div = document.createElement("div");
+      div.className = "msg " + (role === "Caller" ? "user" : "ai");
+      div.innerHTML = `<span class="role">${role}</span>${text}`;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function speakText(text, lang) {
+      if (!("speechSynthesis" in window)) return;
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = lang || currentLang;
+      u.rate = 1.0;
+      window.speechSynthesis.speak(u);
+    }
+
+    function parseTwiMLSay(xmlText) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(xmlText, "application/xml");
+      const says = Array.from(doc.querySelectorAll("Say"));
+      const hangup = doc.querySelector("Hangup");
+      const dial = doc.querySelector("Dial Number");
+      let text = says.map(s => s.textContent).join(" ");
+      if (dial) text += ` [Transferring to Receptionist: ${dial.textContent}]`;
+      const langAttr = says[0]?.getAttribute("language") || currentLang;
+      return { text, langAttr, isHangup: Boolean(hangup) };
+    }
+
+    async function startWebCall() {
+      callSid = "CA_WEB_" + Math.random().toString(36).substring(2, 10).toUpperCase();
+      callStage = "emergency_or_lang";
+      currentLang = "en-IN";
+      currentLangCode = "en";
+
+      document.getElementById("transcript").innerHTML = "";
+      document.getElementById("btn-start").style.display = "none";
+      document.getElementById("btn-hangup").style.display = "inline-block";
+      document.getElementById("btn-mic").disabled = false;
+      document.getElementById("speech-input").disabled = false;
+      document.getElementById("btn-send").disabled = false;
+
+      const status = document.getElementById("call-status");
+      status.textContent = "Call Connected (" + callSid + ")";
+      status.className = "status-pill live";
+
+      const fd = new URLSearchParams({ CallSid: callSid });
+      const res = await fetch("/twilio/incoming", { method: "POST", body: fd });
+      const xml = await res.text();
+      const { text, langAttr } = parseTwiMLSay(xml);
+      addMsg("VoxMed AI", text);
+      speakText(text, langAttr);
+    }
+
+    function endWebCall() {
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+      callStage = "idle";
+      document.getElementById("btn-start").style.display = "inline-block";
+      document.getElementById("btn-hangup").style.display = "none";
+      document.getElementById("btn-mic").disabled = true;
+      document.getElementById("speech-input").disabled = true;
+      document.getElementById("btn-send").disabled = true;
+      const status = document.getElementById("call-status");
+      status.textContent = "Call Ended";
+      status.className = "status-pill";
+    }
+
+    async function pressDigit(digit) {
+      if (callStage === "idle") {
+        await startWebCall();
+      }
+      addMsg("Caller", `[Pressed Keypad: ${digit}]`);
+
+      if (callStage === "emergency_or_lang") {
+        const fd = new URLSearchParams({ CallSid: callSid, Digits: digit });
+        const res = await fetch("/twilio/emergency_check", { method: "POST", body: fd });
+        const xml = await res.text();
+        const { text, langAttr, isHangup } = parseTwiMLSay(xml);
+        currentLang = langAttr;
+        currentLangCode = digit === "2" ? "hi" : digit === "3" ? "kn" : digit === "4" ? "te" : "en";
+        addMsg("VoxMed AI", text);
+        speakText(text, langAttr);
+        if (digit === "0" || isHangup) {
+          endWebCall();
+        } else {
+          callStage = "hospital";
+        }
+      } else if (callStage === "hospital") {
+        const fd = new URLSearchParams({ CallSid: callSid, Digits: digit });
+        const res = await fetch(`/twilio/hospital_selected?lang=${currentLangCode}`, { method: "POST", body: fd });
+        const xml = await res.text();
+        const { text, langAttr } = parseTwiMLSay(xml);
+        currentLang = langAttr;
+        addMsg("VoxMed AI", text);
+        speakText(text, langAttr);
+        callStage = "conversation";
+      }
+    }
+
+    async function sendSpokenUtterance(utterance) {
+      if (!utterance.trim()) return;
+      addMsg("Caller", utterance);
+
+      let endpoint = "/twilio/process";
+      const fd = new URLSearchParams({ CallSid: callSid, SpeechResult: utterance });
+
+      if (callStage === "hospital") {
+        endpoint = `/twilio/hospital_selected?lang=${currentLangCode}`;
+        callStage = "conversation";
+      } else if (callStage === "emergency_or_lang") {
+        endpoint = "/twilio/language_selected";
+        fd.set("Digits", "1");
+        callStage = "hospital";
+      }
+
+      const res = await fetch(endpoint, { method: "POST", body: fd });
+      const xml = await res.text();
+      const { text, langAttr, isHangup } = parseTwiMLSay(xml);
+      addMsg("VoxMed AI", text);
+      speakText(text, langAttr);
+      if (isHangup) endWebCall();
+    }
+
+    function sendTextSpeech(e) {
+      e.preventDefault();
+      const input = document.getElementById("speech-input");
+      const val = input.value;
+      input.value = "";
+      sendSpokenUtterance(val);
+    }
+
+    function toggleMic() {
+      const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRec) {
+        alert("Please use Google Chrome for live microphone speech recognition, or type in the box on the right.");
+        return;
+      }
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+      const btn = document.getElementById("btn-mic");
+
+      if (isListening && recognition) {
+        recognition.stop();
+        return;
+      }
+
+      recognition = new SpeechRec();
+      recognition.lang = currentLang;
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        isListening = true;
+        btn.classList.add("listening");
+        btn.innerHTML = "&#128308; Listening... Speak Now";
+      };
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        sendSpokenUtterance(transcript);
+      };
+      recognition.onend = () => {
+        isListening = false;
+        btn.classList.remove("listening");
+        btn.innerHTML = "&#127908; Hold / Click to Speak";
+      };
+      recognition.start();
+    }
+  </script>
+</body>
+</html>
