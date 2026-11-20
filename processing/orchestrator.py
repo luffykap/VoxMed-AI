@@ -99,7 +99,7 @@ _SLOT_TEMPLATES = {
     "english": {
         "book_appointment": {
             "medical_need": "What symptoms are you experiencing? Do you have any specific doctor you want to see?",
-            "date": "What date would you prefer for the appointment?",
+            "date": "What date and time would you prefer for the appointment?",
             "time": "What time would you like?",
             "patient_name": "Please provide the patient's name.",
         },
@@ -110,7 +110,7 @@ _SLOT_TEMPLATES = {
         "reschedule_appointment": {
             "patient_name": "Please provide the patient's name.",
             "current_date": "What is the date of your current appointment?",
-            "new_date": "What new date would you like to reschedule to?",
+            "new_date": "What new date and time would you like to reschedule to?",
             "new_time": "What time would you prefer on the new date?",
         },
         "check_availability": {
@@ -120,7 +120,7 @@ _SLOT_TEMPLATES = {
     "hindi": {
         "book_appointment": {
             "medical_need": "आप किन लक्षणों का अनुभव कर रहे हैं? क्या आप किसी विशेष डॉक्टर को दिखाना चाहते हैं?",
-            "date": "आप किस तारीख को अपॉइंटमेंट बुक करना चाहते हैं?",
+            "date": "आप किस तारीख और समय पर अपॉइंटमेंट बुक करना चाहते हैं?",
             "time": "आप किस समय अपॉइंटमेंट चाहते हैं?",
             "patient_name": "कृपया मरीज का नाम बताएं।",
         },
@@ -131,7 +131,7 @@ _SLOT_TEMPLATES = {
         "reschedule_appointment": {
             "patient_name": "कृपया मरीज का नाम बताएं।",
             "current_date": "आपके वर्तमान अपॉइंटमेंट की तारीख क्या है?",
-            "new_date": "आप किस नई तारीख को अपॉइंटमेंट चाहते हैं?",
+            "new_date": "आप किस नई तारीख और समय पर अपॉइंटमेंट चाहते हैं?",
             "new_time": "आप नई तारीख पर किस समय अपॉइंटमेंट चाहते हैं?",
         },
         "check_availability": {
@@ -141,7 +141,7 @@ _SLOT_TEMPLATES = {
     "kannada": {
         "book_appointment": {
             "medical_need": "ನೀವು ಯಾವ ರೋಗಲಕ್ಷಣಗಳನ್ನು ಅನುಭವಿಸುತ್ತಿದ್ದೀರಿ? ನೀವು ಯಾವುದೇ ನಿರ್ದಿಷ್ಟ ವೈದ್ಯರನ್ನು ಭೇಟಿಯಾಗಲು ಬಯಸುವಿರಾ?",
-            "date": "ನೀವು ಯಾವ ದಿನಾಂಕದಂದು ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಬುಕ್ ಮಾಡಲು ಬಯಸುತ್ತೀರಿ?",
+            "date": "ನೀವು ಯಾವ ದಿನಾಂಕ ಮತ್ತು ಸಮಯದಂದು ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಬುಕ್ ಮಾಡಲು ಬಯಸುತ್ತೀರಿ?",
             "time": "ನೀವು ಯಾವ ಸಮಯವನ್ನು ಬಯಸುತ್ತೀರಿ?",
             "patient_name": "ದಯವಿಟ್ಟು ರೋಗಿಯ ಹೆಸರನ್ನು ಒದಗಿಸಿ.",
         },
@@ -152,7 +152,7 @@ _SLOT_TEMPLATES = {
         "reschedule_appointment": {
             "patient_name": "ದಯವಿಟ್ಟು ರೋಗಿಯ ಹೆಸರನ್ನು ಒದಗಿಸಿ.",
             "current_date": "ನಿಮ್ಮ ಪ್ರಸ್ತುತ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ದಿನಾಂಕ ಯಾವುದು?",
-            "new_date": "ನೀವು ಯಾವ ಹೊಸ ದಿನಾಂಕಕ್ಕೆ ಬದಲಾಯಿಸಲು ಬಯಸುತ್ತೀರಿ?",
+            "new_date": "ನೀವು ಯಾವ ಹೊಸ ದಿನಾಂಕ ಮತ್ತು ಸಮಯಕ್ಕೆ ಬದಲಾಯಿಸಲು ಬಯಸುತ್ತೀರಿ?",
             "new_time": "ಹೊಸ ದಿನಾಂಕದಂದು ನೀವು ಯಾವ ಸಮಯವನ್ನು ಬಯಸುತ್ತೀರಿ?",
         },
         "check_availability": {
@@ -162,7 +162,7 @@ _SLOT_TEMPLATES = {
     "telugu": {
         "book_appointment": {
             "medical_need": "మీరు ఏ లక్షణాలను ఎదుర్కొంటున్నారు? మీరు నిర్దిష్ట వైద్యుడిని కలవాలనుకుంటున్నారా?",
-            "date": "మీరు ఏ తేదీన అపాయింట్‌మెంట్ బుక్ చేయాలనుకుంటున్నారు?",
+            "date": "మీరు ఏ తేదీ మరియు సమయానికి అపాయింట్‌మెంట్ బుక్ చేయాలనుకుంటున్నారు?",
             "time": "మీకు ఏ సమయం కావాలి?",
             "patient_name": "దయచేసి రోగి పేరును తెలపండి.",
         },

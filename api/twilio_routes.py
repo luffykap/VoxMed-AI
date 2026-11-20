@@ -20,7 +20,7 @@ active_calls: Dict[str, ConversationOrchestrator] = {}
 pending_call_lang: Dict[str, tuple[str, str]] = {}
 
 def get_twiml_response(reply_text: str, is_finished: bool, lang_code: str = "en") -> str:
-    """Helper to generate TwiML for a reply and gather more input if needed."""
+    """Helper to generate TwiML for a reply and gather more input if needed (zero-redirect to save Twilio trial hops)."""
     response = VoiceResponse()
     
     twilio_lang = "en-US"
@@ -30,24 +30,33 @@ def get_twiml_response(reply_text: str, is_finished: bool, lang_code: str = "en"
         twilio_lang = "kn-IN" 
     elif lang_code.startswith("te"):
         twilio_lang = "te-IN"
-    
-    # Speak the AI's reply
-    response.say(reply_text, language=twilio_lang)
 
     if not is_finished:
+        # Primary gather: speak the AI's reply inside Gather so user can respond immediately
         gather = Gather(
             input="speech",
             action=f"{PUBLIC_BASE_URL}/twilio/process",
             method="POST",
-            timeout=5,
-            speechTimeout="0.8",
+            timeout=6,
+            speechTimeout="auto",
             language=twilio_lang
         )
+        gather.say(reply_text, language=twilio_lang)
         response.append(gather)
-        # If the user stays silent, Twilio will continue past the Gather.
-        response.say("Are you still there?", language=twilio_lang)
-        response.redirect(f"{PUBLIC_BASE_URL}/twilio/process_silence", method="POST")
+
+        # Inlined second Gather on silence — avoids a <Redirect> to /twilio/process_silence (saves 2 hops!)
+        gather_retry = Gather(
+            input="speech",
+            action=f"{PUBLIC_BASE_URL}/twilio/process",
+            method="POST",
+            timeout=6,
+            speechTimeout="auto",
+            language=twilio_lang
+        )
+        gather_retry.say(_PHRASES.get(lang_code, _PHRASES["en"])["silence"], language=twilio_lang)
+        response.append(gather_retry)
     else:
+        response.say(reply_text, language=twilio_lang)
         response.hangup()
 
     return str(response)
@@ -84,37 +93,38 @@ async def twilio_incoming(request: Request):
     
     emergency_prompt = (
         "Welcome to VoxMed AI. If this is a medical emergency, press 0 to connect "
-        "directly with our human receptionist. Otherwise, please stay on the line to "
-        "select your preferred language."
+        "directly with our human receptionist."
     )
+    lang_prompt = _PHRASES['en']['greeting_suffix']
     logger.info("Incoming Twilio call | CallSid=%s", call_sid)
     logger.info("Greeting (Emergency Option) | CallSid=%s | Prompt=%r", call_sid, emergency_prompt)
+    logger.info("Language Menu | CallSid=%s | Prompt=%r", call_sid, lang_prompt)
 
     response = VoiceResponse()
     
-    gather_emergency = Gather(
+    # Single Gather handles both Emergency (0) and Language (1-4) in 1 hop!
+    gather_initial = Gather(
         numDigits=1,
         action=f"{PUBLIC_BASE_URL}/twilio/emergency_check",
         method="POST",
-        timeout=2
+        timeout=6
     )
-    gather_emergency.say(emergency_prompt, language="en-IN")
-    response.append(gather_emergency)
-    
-    # Inline the language menu Gather directly so normal callers don't pay an extra HTTP redirect hop
-    lang_prompt = _PHRASES['en']['greeting_suffix']
-    logger.info("Language Menu | CallSid=%s | Prompt=%r", call_sid, lang_prompt)
-    gather_lang = Gather(
-        numDigits=1,
-        action=f"{PUBLIC_BASE_URL}/twilio/language_selected",
-        method="POST",
-        timeout=5
-    )
-    gather_lang.say(f"{lang_prompt}", language="en-IN")
-    response.append(gather_lang)
+    gather_initial.say(f"{emergency_prompt} {lang_prompt}", language="en-IN")
+    response.append(gather_initial)
 
-    # Fallback if the user doesn't press anything in the language menu
-    response.redirect(f"{PUBLIC_BASE_URL}/twilio/language_selected?Digits=1", method="POST")
+    # Fallback if caller doesn't press any key: inline English hospital selection directly (0 redirect hops!)
+    pending_call_lang[call_sid] = ("English", "en")
+    gather_hosp = Gather(
+        input="dtmf speech",
+        numDigits=1,
+        action=f"{PUBLIC_BASE_URL}/twilio/hospital_selected?lang=en",
+        method="POST",
+        timeout=6,
+        speechTimeout="auto",
+        language="en-IN",
+    )
+    gather_hosp.say(_build_hospital_prompt("en"), language="en-IN")
+    response.append(gather_hosp)
     
     return HTMLResponse(content=str(response), media_type="application/xml")
 
