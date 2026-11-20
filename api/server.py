@@ -47,6 +47,32 @@ app = FastAPI(title="VoxMed Admin API", version="1.0.0")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+
+@app.on_event("startup")
+async def _startup_warmup_and_keepalive():
+    """Pre-warm database schema at startup and keep Render + NeonDB awake every 4 minutes."""
+    import asyncio
+    import httpx
+    from database import get_all_hospitals
+
+    try:
+        get_all_hospitals()
+    except Exception:
+        pass
+
+    async def _keep_alive_loop():
+        url = "https://voxmed-ai.onrender.com/health"
+        while True:
+            await asyncio.sleep(240)
+            try:
+                get_all_hospitals()
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    await client.get(url)
+            except Exception:
+                pass
+
+    asyncio.create_task(_keep_alive_loop())
+
 # ── CORS ─────────────────────────────────────────────────────────────────────
 # In production PUBLIC_BASE_URL is set to the deployed domain.
 # Locally it defaults to http://localhost:8000.

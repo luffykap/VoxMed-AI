@@ -96,13 +96,25 @@ async def twilio_incoming(request: Request):
         numDigits=1,
         action=f"{PUBLIC_BASE_URL}/twilio/emergency_check",
         method="POST",
-        timeout=3
+        timeout=2
     )
     gather_emergency.say(emergency_prompt, language="en-IN")
     response.append(gather_emergency)
     
-    # Fallback if the user doesn't press anything in the emergency gather
-    response.redirect(f"{PUBLIC_BASE_URL}/twilio/language_menu", method="POST")
+    # Inline the language menu Gather directly so normal callers don't pay an extra HTTP redirect hop
+    lang_prompt = _PHRASES['en']['greeting_suffix']
+    logger.info("Language Menu | CallSid=%s | Prompt=%r", call_sid, lang_prompt)
+    gather_lang = Gather(
+        numDigits=1,
+        action=f"{PUBLIC_BASE_URL}/twilio/language_selected",
+        method="POST",
+        timeout=5
+    )
+    gather_lang.say(f"{lang_prompt}", language="en-IN")
+    response.append(gather_lang)
+
+    # Fallback if the user doesn't press anything in the language menu
+    response.redirect(f"{PUBLIC_BASE_URL}/twilio/language_selected?Digits=1", method="POST")
     
     return HTMLResponse(content=str(response), media_type="application/xml")
 
@@ -157,9 +169,8 @@ async def twilio_emergency_check(request: Request):
         dial.number(receptionist_phone)
         response.append(dial)
     else:
-        # User pressed something else (e.g. 1), so redirect to language selection
-        # By appending Digits to query params, language_selected will pick it up
-        response.redirect(f"{PUBLIC_BASE_URL}/twilio/language_selected?Digits={digits}", method="POST")
+        # User pressed 1/2/3/4 during the greeting — handle language selection directly without an extra Redirect hop
+        return await twilio_language_selected(request)
         
     return HTMLResponse(content=str(response), media_type="application/xml")
 
