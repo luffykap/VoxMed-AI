@@ -316,18 +316,18 @@ async def _call_with_failover(
             return result
 
         except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as exc:
-            # If rate limited, apply cooldown
+            # Place any failing or rate-limited provider on cooldown so subsequent turns don't stall
             if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
                 logger.debug(
                     "Provider %s rate-limited (429) -- placing on %ds cooldown",
                     name, COOLDOWN_SECONDS
                 )
-                _provider_cooldowns[name] = time.time() + COOLDOWN_SECONDS
             else:
                 logger.debug(
-                    "Provider %s failed (%s: %s) -- trying next",
-                    name, type(exc).__name__, exc,
+                    "Provider %s failed (%s: %s) -- placing on %ds cooldown & trying next",
+                    name, type(exc).__name__, exc, COOLDOWN_SECONDS,
                 )
+            _provider_cooldowns[name] = time.time() + COOLDOWN_SECONDS
             last_exc = exc
             continue
 

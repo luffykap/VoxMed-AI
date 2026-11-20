@@ -24,6 +24,40 @@ _USE_POSTGRES = bool(config.DATABASE_URL)
 _schema_ensured = False
 _cleanup_done   = False
 _psycopg2_patched = False
+_pg_pool = None
+
+
+class _PooledPgConn:
+    """Thin wrapper around a pooled psycopg2 connection that returns it to the pool on close()."""
+    def __init__(self, raw_conn, pool):
+        self._conn = raw_conn
+        self._pool = pool
+        self._returned = False
+
+    def cursor(self, *args, **kwargs):
+        return self._conn.cursor(*args, **kwargs)
+
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+    def close(self):
+        if not self._returned:
+            self._returned = True
+            try:
+                if not self._conn.closed:
+                    self._conn.rollback()
+                self._pool.putconn(self._conn)
+            except Exception:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
 
 # ── Thin compatibility wrapper ────────────────────────────────────────────────
 def _adapt_sql(sql: str) -> str:
@@ -107,8 +141,32 @@ def get_connection():
             RealDictCursor.fetchall = patched_fetchall
             _psycopg2_patched = True
 
-        conn = psycopg2.connect(config.DATABASE_URL, cursor_factory=RealDictCursor)
-        conn.autocommit = False  # explicit transaction control matches sqlite3 behaviour
+        global _pg_pool
+        from psycopg2 import pool as pg_pool
+
+        if _pg_pool is None:
+            _pg_pool = pg_pool.ThreadedConnectionPool(
+                1, 10, config.DATABASE_URL, cursor_factory=RealDictCursor
+            )
+
+        raw_conn = _pg_pool.getconn()
+        try:
+            if raw_conn.closed:
+                _pg_pool.putconn(raw_conn, close=True)
+                raw_conn = _pg_pool.getconn()
+            else:
+                with raw_conn.cursor() as _cur:
+                    _cur.execute("SELECT 1")
+                raw_conn.commit()
+        except Exception:
+            try:
+                _pg_pool.putconn(raw_conn, close=True)
+            except Exception:
+                pass
+            raw_conn = psycopg2.connect(config.DATABASE_URL, cursor_factory=RealDictCursor)
+
+        raw_conn.autocommit = False  # explicit transaction control matches sqlite3 behaviour
+        conn = _PooledPgConn(raw_conn, _pg_pool)
 
         if not _schema_ensured:
             _ensure_schema(conn)

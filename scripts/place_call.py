@@ -41,6 +41,15 @@ if missing:
         "  TWILIO_PHONE_NUMBER=+1xxxxxxxxxx\n"
     )
 
+import urllib.request
+
+# Warm up Render + NeonDB connection pool before placing the call so Twilio's 5s trial timeout never hits a cold start
+try:
+    print(f"Warming up {BASE_URL} ...")
+    urllib.request.urlopen(f"{BASE_URL.rstrip('/')}/twilio/language_selected?CallSid=WARMUP&Digits=1", timeout=60).read()
+except Exception as exc:
+    print(f"Warmup notice: {exc}")
+
 client = Client(os.environ["TWILIO_ACCOUNT_SID"], os.environ["TWILIO_AUTH_TOKEN"])
 call = client.calls.create(
     to=to_number,

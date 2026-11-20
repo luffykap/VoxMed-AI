@@ -119,7 +119,7 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "voxmed123")
 LLM_TEMPERATURE               = 0.1
 LLM_MAX_TOKENS_UNDERSTANDING  = 250
 LLM_MAX_TOKENS_RESPONSE       = 80
-LLM_TIMEOUT                   = 6  # Seconds before giving up on a provider and trying the next
+LLM_TIMEOUT                   = 2.8  # Seconds before giving up on a provider (kept <5s for Twilio trial timeout)
 
 # ── LLM — per-provider credentials ────────────────────────────
 # Each entry: (env_var_name, base_url, model)
