@@ -12,6 +12,8 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://voxmed-ai.onrender.com").rstrip("/")
+
 # In-memory store for active calls (CallSid -> ConversationOrchestrator)
 active_calls: Dict[str, ConversationOrchestrator] = {}
 # Temporary store for language choice before hospital is selected (CallSid -> (language_name, lang_code))
@@ -35,7 +37,7 @@ def get_twiml_response(reply_text: str, is_finished: bool, lang_code: str = "en"
     if not is_finished:
         gather = Gather(
             input="speech",
-            action="/twilio/process",
+            action=f"{PUBLIC_BASE_URL}/twilio/process",
             method="POST",
             timeout=5,
             speechTimeout="0.8",
@@ -44,7 +46,7 @@ def get_twiml_response(reply_text: str, is_finished: bool, lang_code: str = "en"
         response.append(gather)
         # If the user stays silent, Twilio will continue past the Gather.
         response.say("Are you still there?", language=twilio_lang)
-        response.redirect("/twilio/process_silence")
+        response.redirect(f"{PUBLIC_BASE_URL}/twilio/process_silence", method="POST")
     else:
         response.hangup()
 
@@ -74,7 +76,7 @@ _PHRASES = {
     }
 }
 
-@router.api_route("/twilio/incoming", methods=["GET", "POST"])
+@router.api_route("/twilio/incoming", methods=["GET", "POST", "HEAD"])
 async def twilio_incoming(request: Request):
     """Webhook triggered when a new call connects."""
     form_data = await request.form()
@@ -92,7 +94,7 @@ async def twilio_incoming(request: Request):
     
     gather_emergency = Gather(
         numDigits=1,
-        action="/twilio/emergency_check",
+        action=f"{PUBLIC_BASE_URL}/twilio/emergency_check",
         method="POST",
         timeout=3
     )
@@ -100,11 +102,11 @@ async def twilio_incoming(request: Request):
     response.append(gather_emergency)
     
     # Fallback if the user doesn't press anything in the emergency gather
-    response.redirect("/twilio/language_menu", method="POST")
+    response.redirect(f"{PUBLIC_BASE_URL}/twilio/language_menu", method="POST")
     
     return HTMLResponse(content=str(response), media_type="application/xml")
 
-@router.api_route("/twilio/language_menu", methods=["GET", "POST"])
+@router.api_route("/twilio/language_menu", methods=["GET", "POST", "HEAD"])
 async def twilio_language_menu(request: Request):
     """Webhook for language selection (after emergency check)."""
     form_data = await request.form()
@@ -116,7 +118,7 @@ async def twilio_language_menu(request: Request):
     
     gather_lang = Gather(
         numDigits=1,
-        action="/twilio/language_selected",
+        action=f"{PUBLIC_BASE_URL}/twilio/language_selected",
         method="POST",
         timeout=5
     )
@@ -124,11 +126,11 @@ async def twilio_language_menu(request: Request):
     response.append(gather_lang)
     
     # Fallback if the user doesn't press anything in the language menu
-    response.redirect("/twilio/language_selected?Digits=1", method="POST")
+    response.redirect(f"{PUBLIC_BASE_URL}/twilio/language_selected?Digits=1", method="POST")
     
     return HTMLResponse(content=str(response), media_type="application/xml")
 
-@router.api_route("/twilio/emergency_check", methods=["GET", "POST"])
+@router.api_route("/twilio/emergency_check", methods=["GET", "POST", "HEAD"])
 async def twilio_emergency_check(request: Request):
     """Webhook triggered by the emergency gather."""
     form_data = await request.form()
@@ -148,7 +150,7 @@ async def twilio_emergency_check(request: Request):
         
         # Dial with action to handle failure
         dial = Dial(
-            action="/twilio/emergency_transfer_status",
+            action=f"{PUBLIC_BASE_URL}/twilio/emergency_transfer_status",
             method="POST",
             timeout=20
         )
@@ -157,11 +159,11 @@ async def twilio_emergency_check(request: Request):
     else:
         # User pressed something else (e.g. 1), so redirect to language selection
         # By appending Digits to query params, language_selected will pick it up
-        response.redirect(f"/twilio/language_selected?Digits={digits}", method="POST")
+        response.redirect(f"{PUBLIC_BASE_URL}/twilio/language_selected?Digits={digits}", method="POST")
         
     return HTMLResponse(content=str(response), media_type="application/xml")
 
-@router.api_route("/twilio/emergency_transfer_status", methods=["GET", "POST"])
+@router.api_route("/twilio/emergency_transfer_status", methods=["GET", "POST", "HEAD"])
 async def twilio_emergency_transfer_status(request: Request):
     """Webhook triggered when the dial to receptionist ends or fails."""
     form_data = await request.form()
@@ -177,7 +179,7 @@ async def twilio_emergency_transfer_status(request: Request):
         response.say(fallback_msg, language="en-IN")
         
         # Do not disconnect the caller unnecessarily - redirect to existing language menu
-        response.redirect("/twilio/language_menu", method="POST")
+        response.redirect(f"{PUBLIC_BASE_URL}/twilio/language_menu", method="POST")
         
     return HTMLResponse(content=str(response), media_type="application/xml")
 
@@ -201,7 +203,7 @@ def _build_hospital_prompt(lang_code: str) -> str:
         return f"Please select a hospital. {options}."
 
 
-@router.api_route("/twilio/language_selected", methods=["GET", "POST"])
+@router.api_route("/twilio/language_selected", methods=["GET", "POST", "HEAD"])
 async def twilio_language_selected(request: Request):
     """Webhook triggered after language is selected. Prompts caller to select a hospital (keypad or voice)."""
     form_data = await request.form()
@@ -234,7 +236,7 @@ async def twilio_language_selected(request: Request):
     gather_hosp = Gather(
         input="dtmf speech",
         numDigits=1,
-        action=f"/twilio/hospital_selected?lang={lang_code}",
+        action=f"{PUBLIC_BASE_URL}/twilio/hospital_selected?lang={lang_code}",
         method="POST",
         timeout=5,
         speechTimeout="auto",
@@ -246,11 +248,11 @@ async def twilio_language_selected(request: Request):
     response.append(gather_hosp)
 
     # Fallback if caller stays silent: default to Hospital 1
-    response.redirect(f"/twilio/hospital_selected?Digits=1&lang={lang_code}", method="POST")
+    response.redirect(f"{PUBLIC_BASE_URL}/twilio/hospital_selected?Digits=1&lang={lang_code}", method="POST")
     return HTMLResponse(content=str(response), media_type="application/xml")
 
 
-@router.api_route("/twilio/hospital_selected", methods=["GET", "POST"])
+@router.api_route("/twilio/hospital_selected", methods=["GET", "POST", "HEAD"])
 async def twilio_hospital_selected(request: Request):
     """Webhook triggered after caller selects a hospital via keypad (Digits) or voice (SpeechResult)."""
     form_data = await request.form()
@@ -291,7 +293,7 @@ async def twilio_hospital_selected(request: Request):
     return HTMLResponse(content=twiml, media_type="application/xml")
 
 
-@router.api_route("/twilio/process", methods=["GET", "POST"])
+@router.api_route("/twilio/process", methods=["GET", "POST", "HEAD"])
 async def twilio_process(request: Request):
     """Webhook triggered after Twilio Gathers speech."""
     form_data = await request.form()
@@ -346,7 +348,7 @@ async def twilio_process(request: Request):
         
     return HTMLResponse(content=twiml, media_type="application/xml")
 
-@router.api_route("/twilio/process_silence", methods=["GET", "POST"])
+@router.api_route("/twilio/process_silence", methods=["GET", "POST", "HEAD"])
 async def twilio_process_silence(request: Request):
     """Webhook triggered if user stays silent after Gather."""
     form_data = await request.form()
