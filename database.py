@@ -630,6 +630,47 @@ def _ensure_hospital_doctors_and_slots(conn) -> None:
             conn.rollback()
             logger.warning("Auto-seed skipped for hospital_id=%d: %s", h_id, exc)
 
+    # Ensure rolling 14-day future slots exist for all doctors in a seeded DB
+    try:
+        cursor.execute("SELECT id FROM Doctors")
+        all_doc_ids = [r["id"] for r in cursor.fetchall()]
+        if len(all_doc_ids) >= 10:
+            today_str = today.isoformat()
+            cursor.execute(
+                _adapt_sql("SELECT DISTINCT doctor_id, slot_date FROM Slots WHERE slot_date >= ?"),
+                _adapt_params([today_str]),
+            )
+            existing_pairs = {(r["doctor_id"], str(r["slot_date"])) for r in cursor.fetchall()}
+
+            missing_slots = []
+            booked_val = False if _USE_POSTGRES else 0
+            for doc_id in all_doc_ids:
+                for day_offset in range(14):
+                    d_date = (today + timedelta(days=day_offset)).isoformat()
+                    if (doc_id, d_date) not in existing_pairs:
+                        for t in times:
+                            missing_slots.append((doc_id, d_date, t, booked_val))
+
+            if missing_slots:
+                if _USE_POSTGRES:
+                    from psycopg2.extras import execute_batch
+                    execute_batch(
+                        cursor,
+                        "INSERT INTO Slots (doctor_id, slot_date, slot_time, is_booked) VALUES (%s, %s, %s, %s)",
+                        missing_slots,
+                        page_size=1000,
+                    )
+                else:
+                    cursor.executemany(
+                        "INSERT INTO Slots (doctor_id, slot_date, slot_time, is_booked) VALUES (?, ?, ?, ?)",
+                        missing_slots,
+                    )
+                conn.commit()
+                logger.info("Auto-replenished %d rolling 14-day slots across %d doctors", len(missing_slots), len(all_doc_ids))
+    except Exception as exc:
+        conn.rollback()
+        logger.warning("Rolling slot replenishment skipped: %s", exc)
+
 
 def _seed_symptom_mappings(conn) -> None:
     """Insert the built-in symptom→department mappings if the table is empty."""
