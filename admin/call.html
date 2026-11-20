@@ -222,8 +222,8 @@
     <!-- Left Card: SignalWire C2C + Interactive Keypad -->
     <div class="card">
       <div class="sw-box">
-        <h4>SignalWire WebRTC Click-to-Call</h4>
-        <p>Dials +1 (208) 480-7222 directly from your browser via SignalWire</p>
+        <h4>SignalWire Live Voice Call (+1 208 480-7222)</h4>
+        <p>Click below to call live from your browser. <b>Just SPEAK your choices</b> (say <i>"English"</i>, <i>"Hindi"</i>, <i>"Kannada"</i>, <i>"Telugu"</i>, then <i>"Apollo Hospital"</i> / <i>"Manipal"</i> / <i>"Fortis"</i>) — no keypad needed!</p>
         <div id="click2call"></div>
         <div id="call"></div>
       </div>
@@ -303,7 +303,7 @@
     sw.c2c.spawn('C2CButton', {
       destination: '/external/1-208-480-7222',
       buttonParentSelector: '#click2call',
-      innerHTML: null,
+      innerHTML: '<span style="display:inline-flex;align-items:center;gap:8px;background:#16a34a;color:#fff;padding:11px 20px;border-radius:10px;font-weight:700;font-size:14px;cursor:pointer;box-shadow:0 4px 12px rgba(22,163,74,0.35);">&#128222; Call VoxMed AI Live (Hands-Free Voice)</span>',
       callParentSelector: '#call',
       beforeCallStartFn: () => { console.log('attempting to start new call...'); return true; },
       afterCallStartFn: () => { console.log('call started.'); },

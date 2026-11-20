@@ -66,7 +66,7 @@ _PHRASES = {
         "session_expired": "Sorry, the session has expired. Please call back.",
         "no_audio": "I didn't quite catch that. Could you repeat?",
         "silence": "Please let me know how I can help.",
-        "greeting_suffix": "Press 1 for English. Hindi ke liye 2 dabaye. Kannada gaagi 3 otti. Telugu kosam 4 nokkandi."
+        "greeting_suffix": "Press 1 or say English. Hindi ke liye 2 dabaye ya Hindi boliye. Kannada gaagi 3 otti athava Kannada heli. Telugu kosam 4 nokkandi leda Telugu cheppandi."
     },
     "hi": {
         "session_expired": "क्षमा करें, सत्र समाप्त हो गया है। कृपया वापस कॉल करें।",
@@ -85,6 +85,23 @@ _PHRASES = {
     }
 }
 
+def _resolve_initial_choice(digits: str, speech: str) -> str:
+    """Resolve keypad digit OR spoken emergency/language choice into '0', '1', '2', '3', or '4'."""
+    d = (digits or "").strip()
+    if d in ("0", "1", "2", "3", "4"):
+        return d
+    s = (speech or "").strip().lower()
+    if any(w in s for w in ("emergency", "zero", "0", "urgent", "ambulance", "reception")):
+        return "0"
+    if any(w in s for w in ("hindi", "two", "2", "do", "हिंदी", "हिन्दी")):
+        return "2"
+    if any(w in s for w in ("kannada", "canara", "canada", "three", "3", "ಕನ್ನಡ")):
+        return "3"
+    if any(w in s for w in ("telugu", "four", "4", "తెలుగు")):
+        return "4"
+    return "1"
+
+
 @router.api_route("/twilio/incoming", methods=["GET", "POST", "HEAD"])
 async def twilio_incoming(request: Request):
     """Webhook triggered when a new call connects."""
@@ -92,7 +109,7 @@ async def twilio_incoming(request: Request):
     call_sid = form_data.get("CallSid") or request.query_params.get("CallSid", "")
     
     emergency_prompt = (
-        "Welcome to VoxMed AI. If this is a medical emergency, press 0 to connect "
+        "Welcome to VoxMed AI. If this is a medical emergency, press 0 or say emergency to connect "
         "directly with our human receptionist."
     )
     lang_prompt = _PHRASES['en']['greeting_suffix']
@@ -102,17 +119,21 @@ async def twilio_incoming(request: Request):
 
     response = VoiceResponse()
     
-    # Single Gather handles both Emergency (0) and Language (1-4) in 1 hop!
+    # Single Hybrid Gather handles both Emergency (0 / "emergency") and Language (1-4 / spoken language) in 1 hop!
     gather_initial = Gather(
+        input="dtmf speech",
         numDigits=1,
         action=f"{PUBLIC_BASE_URL}/twilio/emergency_check",
         method="POST",
-        timeout=6
+        timeout=6,
+        speechTimeout="auto",
+        language="en-IN",
+        hints="English, Hindi, Kannada, Telugu, Emergency, 0, 1, 2, 3, 4",
     )
     gather_initial.say(f"{emergency_prompt} {lang_prompt}", language="en-IN")
     response.append(gather_initial)
 
-    # Fallback if caller doesn't press any key: inline English hospital selection directly (0 redirect hops!)
+    # Fallback if caller doesn't press or say anything: inline English hospital selection directly (0 redirect hops!)
     pending_call_lang[call_sid] = ("English", "en")
     gather_hosp = Gather(
         input="dtmf speech",
@@ -139,10 +160,14 @@ async def twilio_language_menu(request: Request):
     response = VoiceResponse()
     
     gather_lang = Gather(
+        input="dtmf speech",
         numDigits=1,
         action=f"{PUBLIC_BASE_URL}/twilio/language_selected",
         method="POST",
-        timeout=5
+        timeout=5,
+        speechTimeout="auto",
+        language="en-IN",
+        hints="English, Hindi, Kannada, Telugu, 1, 2, 3, 4",
     )
     gather_lang.say(f"{lang_prompt}", language="en-IN")
     response.append(gather_lang)
@@ -154,19 +179,21 @@ async def twilio_language_menu(request: Request):
 
 @router.api_route("/twilio/emergency_check", methods=["GET", "POST", "HEAD"])
 async def twilio_emergency_check(request: Request):
-    """Webhook triggered by the emergency gather."""
+    """Webhook triggered by the emergency/language hybrid gather."""
     form_data = await request.form()
     call_sid = form_data.get("CallSid") or request.query_params.get("CallSid", "")
-    digits = form_data.get("Digits") or request.query_params.get("Digits", "")
+    raw_digits = form_data.get("Digits") or request.query_params.get("Digits", "")
+    speech_result = form_data.get("SpeechResult") or request.query_params.get("SpeechResult", "")
+    choice = _resolve_initial_choice(raw_digits, speech_result)
     
     response = VoiceResponse()
     
-    if digits == "0":
+    if choice == "0":
         transfer_msg = "Please hold while we connect you to our receptionist."
         receptionist_phone = os.getenv("RECEPTIONIST_PHONE", "+1234567890")
         logger.info(
-            "Emergency Option Selected | CallSid=%s | Digits=%s | Action='Transfer to human receptionist' | Dial=%s | Prompt=%r",
-            call_sid, digits, receptionist_phone, transfer_msg,
+            "Emergency Option Selected | CallSid=%s | Digits=%s | Speech=%r | Action='Transfer to human receptionist' | Dial=%s | Prompt=%r",
+            call_sid, raw_digits, speech_result, receptionist_phone, transfer_msg,
         )
         response.say(transfer_msg, language="en-IN")
         
@@ -179,7 +206,7 @@ async def twilio_emergency_check(request: Request):
         dial.number(receptionist_phone)
         response.append(dial)
     else:
-        # User pressed 1/2/3/4 during the greeting — handle language selection directly without an extra Redirect hop
+        # User pressed 1/2/3/4 OR spoke English/Hindi/Kannada/Telugu — handle directly without an extra Redirect hop
         return await twilio_language_selected(request)
         
     return HTMLResponse(content=str(response), media_type="application/xml")
@@ -226,12 +253,14 @@ def _build_hospital_prompt(lang_code: str) -> str:
 
 @router.api_route("/twilio/language_selected", methods=["GET", "POST", "HEAD"])
 async def twilio_language_selected(request: Request):
-    """Webhook triggered after language is selected. Prompts caller to select a hospital (keypad or voice)."""
+    """Webhook triggered after language is selected (keypad or spoken). Prompts caller to select a hospital."""
     form_data = await request.form()
     call_sid = form_data.get("CallSid") or request.query_params.get("CallSid", "")
     
-    # Check form_data first, then query_params for fallback redirect
-    digits = form_data.get("Digits") or request.query_params.get("Digits", "1")
+    # Check form_data first, then query_params, then spoken SpeechResult
+    raw_digits = form_data.get("Digits") or request.query_params.get("Digits", "")
+    speech_result = form_data.get("SpeechResult") or request.query_params.get("SpeechResult", "")
+    digits = _resolve_initial_choice(raw_digits, speech_result)
     
     if digits == "2":
         language = "Hindi"
