@@ -46,6 +46,5 @@ call = client.calls.create(
     to=to_number,
     from_=os.environ["TWILIO_PHONE_NUMBER"],
     url=f"{BASE_URL.rstrip('/')}/twilio/incoming",
-    method="POST",
 )
 print(f"Call started to {to_number}! Call SID: {call.sid}")

@@ -74,11 +74,11 @@ _PHRASES = {
     }
 }
 
-@router.post("/twilio/incoming")
+@router.api_route("/twilio/incoming", methods=["GET", "POST"])
 async def twilio_incoming(request: Request):
     """Webhook triggered when a new call connects."""
     form_data = await request.form()
-    call_sid = form_data.get("CallSid", "")
+    call_sid = form_data.get("CallSid") or request.query_params.get("CallSid", "")
     
     emergency_prompt = (
         "Welcome to VoxMed AI. If this is a medical emergency, press 0 to connect "
@@ -104,11 +104,11 @@ async def twilio_incoming(request: Request):
     
     return HTMLResponse(content=str(response), media_type="application/xml")
 
-@router.post("/twilio/language_menu")
+@router.api_route("/twilio/language_menu", methods=["GET", "POST"])
 async def twilio_language_menu(request: Request):
     """Webhook for language selection (after emergency check)."""
     form_data = await request.form()
-    call_sid = form_data.get("CallSid", "")
+    call_sid = form_data.get("CallSid") or request.query_params.get("CallSid", "")
     lang_prompt = _PHRASES['en']['greeting_suffix']
     logger.info("Language Menu | CallSid=%s | Prompt=%r", call_sid, lang_prompt)
 
@@ -128,12 +128,12 @@ async def twilio_language_menu(request: Request):
     
     return HTMLResponse(content=str(response), media_type="application/xml")
 
-@router.post("/twilio/emergency_check")
+@router.api_route("/twilio/emergency_check", methods=["GET", "POST"])
 async def twilio_emergency_check(request: Request):
     """Webhook triggered by the emergency gather."""
     form_data = await request.form()
-    call_sid = form_data.get("CallSid", "")
-    digits = form_data.get("Digits", "")
+    call_sid = form_data.get("CallSid") or request.query_params.get("CallSid", "")
+    digits = form_data.get("Digits") or request.query_params.get("Digits", "")
     
     response = VoiceResponse()
     
@@ -161,12 +161,12 @@ async def twilio_emergency_check(request: Request):
         
     return HTMLResponse(content=str(response), media_type="application/xml")
 
-@router.post("/twilio/emergency_transfer_status")
+@router.api_route("/twilio/emergency_transfer_status", methods=["GET", "POST"])
 async def twilio_emergency_transfer_status(request: Request):
     """Webhook triggered when the dial to receptionist ends or fails."""
     form_data = await request.form()
-    call_sid = form_data.get("CallSid", "")
-    dial_status = form_data.get("DialCallStatus", "")
+    call_sid = form_data.get("CallSid") or request.query_params.get("CallSid", "")
+    dial_status = form_data.get("DialCallStatus") or request.query_params.get("DialCallStatus", "")
     logger.info("Emergency Transfer Status | CallSid=%s | DialCallStatus=%s", call_sid, dial_status)
     
     response = VoiceResponse()
@@ -201,11 +201,11 @@ def _build_hospital_prompt(lang_code: str) -> str:
         return f"Please select a hospital. {options}."
 
 
-@router.post("/twilio/language_selected")
+@router.api_route("/twilio/language_selected", methods=["GET", "POST"])
 async def twilio_language_selected(request: Request):
     """Webhook triggered after language is selected. Prompts caller to select a hospital (keypad or voice)."""
     form_data = await request.form()
-    call_sid = form_data.get("CallSid", "")
+    call_sid = form_data.get("CallSid") or request.query_params.get("CallSid", "")
     
     # Check form_data first, then query_params for fallback redirect
     digits = form_data.get("Digits") or request.query_params.get("Digits", "1")
@@ -250,14 +250,14 @@ async def twilio_language_selected(request: Request):
     return HTMLResponse(content=str(response), media_type="application/xml")
 
 
-@router.post("/twilio/hospital_selected")
+@router.api_route("/twilio/hospital_selected", methods=["GET", "POST"])
 async def twilio_hospital_selected(request: Request):
     """Webhook triggered after caller selects a hospital via keypad (Digits) or voice (SpeechResult)."""
     form_data = await request.form()
-    call_sid = form_data.get("CallSid", "")
+    call_sid = form_data.get("CallSid") or request.query_params.get("CallSid", "")
 
     digits = (form_data.get("Digits") or request.query_params.get("Digits") or "").strip()
-    speech_result = (form_data.get("SpeechResult") or "").strip()
+    speech_result = (form_data.get("SpeechResult") or request.query_params.get("SpeechResult") or "").strip()
     lang_param = request.query_params.get("lang", "en")
 
     lang_map = {
@@ -291,12 +291,12 @@ async def twilio_hospital_selected(request: Request):
     return HTMLResponse(content=twiml, media_type="application/xml")
 
 
-@router.post("/twilio/process")
+@router.api_route("/twilio/process", methods=["GET", "POST"])
 async def twilio_process(request: Request):
     """Webhook triggered after Twilio Gathers speech."""
     form_data = await request.form()
-    call_sid = form_data.get("CallSid", "")
-    speech_result = form_data.get("SpeechResult", "").strip()
+    call_sid = form_data.get("CallSid") or request.query_params.get("CallSid", "")
+    speech_result = (form_data.get("SpeechResult") or request.query_params.get("SpeechResult") or "").strip()
     
     logger.info("Received speech from Twilio | CallSid=%s | Text=%s", call_sid, speech_result)
 
@@ -346,11 +346,11 @@ async def twilio_process(request: Request):
         
     return HTMLResponse(content=twiml, media_type="application/xml")
 
-@router.post("/twilio/process_silence")
+@router.api_route("/twilio/process_silence", methods=["GET", "POST"])
 async def twilio_process_silence(request: Request):
     """Webhook triggered if user stays silent after Gather."""
     form_data = await request.form()
-    call_sid = form_data.get("CallSid", "")
+    call_sid = form_data.get("CallSid") or request.query_params.get("CallSid", "")
     
     dm = active_calls.get(call_sid)
     if not dm:
